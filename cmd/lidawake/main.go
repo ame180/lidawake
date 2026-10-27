@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/ame180/lidawake/internal/session"
 )
 
+// version is set by -ldflags "-X main.version=..."; see buildVersion for the fallback.
 var version = "dev"
 
 const usage = `lidawake - stay awake with lid closed, until lid reopens
@@ -56,7 +58,7 @@ func main() {
 	case "daemon":
 		err = runDaemon(args)
 	case "version":
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -189,8 +191,20 @@ func runDaemon(args []string) error {
 		MaxAllowed:   72 * time.Hour,
 	}, mgr, mac, log)
 
-	log.Info("lidawake daemon starting", "version", version)
+	log.Info("lidawake daemon starting", "version", buildVersion())
 	return d.Run(ctx)
+}
+
+// buildVersion falls back to the module version recorded by `go install module@version`.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return version
+	}
+	return info.Main.Version
 }
 
 func boolInt(b bool) int {
