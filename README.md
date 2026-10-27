@@ -1,0 +1,54 @@
+# lidawake
+
+Keep a MacBook awake with the lid closed — once. Reopening the lid re-enables normal sleep.
+
+## How it works
+
+- Root launchd daemon (`dev.lidawake.daemon`) owns all `pmset` calls.
+- CLI talks to it over `/var/run/lidawake.sock` (mode 0600, owned by the installing user, so no `sudo` needed for start/stop/status).
+- Session: `start` → `pmset -a disablesleep 1` → poll `AppleClamshellState` every 5 s → lid closed (recorded) → lid opened → `pmset -a disablesleep 0`.
+- Safety deadline (`-max`, default 12h, cap 72h) ends the session even if the lid never reopens.
+- State persisted to `/var/db/lidawake/state.json` on every transition.
+
+Crash / restart behaviour (daemon start):
+
+| Persisted state | Action |
+|---|---|
+| no active session | `disablesleep 0` (clears stale flag) |
+| active, different boot | end session (`reboot`), `disablesleep 0` |
+| active, deadline passed | end session (`deadline`), `disablesleep 0` |
+| active, same boot | resume, re-apply `disablesleep 1`, keep "lid was closed" flag |
+
+`KeepAlive` restarts the daemon after a crash. Writes are ordered so a crash between "save state" and "pmset" always recovers safely.
+
+## Install
+
+```sh
+make test
+make install          # builds, then: sudo ./dist/lidawake install
+```
+
+Puts binary in `/usr/local/bin/lidawake`, plist in `/Library/LaunchDaemons/`, bootstraps it.
+
+## Use
+
+```sh
+lidawake start            # 12h safety deadline
+lidawake start -max 3h
+lidawake status
+lidawake stop
+```
+
+Log: `/var/log/lidawake.log`.
+
+## Uninstall
+
+```sh
+sudo lidawake uninstall   # bootout, remove files, disablesleep 0
+```
+
+## Notes
+
+- Daemon clears `disablesleep` on every start when no session is active. A manual `sudo pmset -a disablesleep 1` will be reset at next boot/daemon restart.
+- Closed lid traps heat. On battery, a session runs until battery dies or deadline.
+- `uninstall` removes `/usr/local/bin/lidawake` — run it from that path or from the build.
