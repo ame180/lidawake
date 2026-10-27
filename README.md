@@ -15,7 +15,7 @@ Crash / restart behaviour (daemon start):
 | Persisted state | Action |
 |---|---|
 | no active session | `disablesleep 0` (clears stale flag) |
-| active, different boot | end session (`reboot`), `disablesleep 0` |
+| active, different or unknown boot | end session (`reboot`), `disablesleep 0` |
 | active, deadline passed | end session (`deadline`), `disablesleep 0` |
 | active, same boot | resume, re-apply `disablesleep 1`, keep "lid was closed" flag |
 
@@ -52,6 +52,7 @@ sudo lidawake uninstall   # bootout, remove files, disablesleep 0
 ## Notes
 
 - Daemon clears `disablesleep` on every start when no session is active. A manual `sudo pmset -a disablesleep 1` will be reset at next boot/daemon restart.
+- Lid is polled every 5 s. Closing and reopening within one poll goes unnoticed; the session then runs until `stop` or the deadline.
 - Closed lid traps heat. On battery, a session runs until battery dies or deadline.
 - `uninstall` removes `/usr/local/bin/lidawake` — run it from that path or from the build.
 - Installed binary is root-owned, but `/usr/local/bin` may be user-writable (e.g. Intel Homebrew). Moving the daemon binary to a root-only path is planned.

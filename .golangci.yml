@@ -5,6 +5,7 @@ linters:
     - errorlint
     - misspell
     - predeclared
+    - revive
   exclusions:
     presets:
       - std-error-handling
