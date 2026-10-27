@@ -8,42 +8,41 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
-// Lid reports whether the laptop lid is closed.
-type Lid interface {
-	IsClosed(ctx context.Context) (bool, error)
-}
+// commandTimeout bounds each ioreg/pmset/sysctl call so a hung tool cannot
+// stall the daemon while it holds the session lock.
+const commandTimeout = 10 * time.Second
 
-// SleepControl reads and sets the system-wide "disablesleep" flag.
-type SleepControl interface {
-	SetSleepDisabled(ctx context.Context, disabled bool) error
-	SleepDisabled(ctx context.Context) (bool, error)
-}
-
-// MacOS implements Lid and SleepControl using ioreg and pmset.
-type MacOS struct{}
+// ErrNoClamshell means the machine reports no lid (not a laptop).
+var ErrNoClamshell = errors.New("AppleClamshellState not found (not a laptop?)")
 
 var (
 	clamshellRe     = regexp.MustCompile(`"AppleClamshellState"\s*=\s*(Yes|No)`)
 	sleepDisabledRe = regexp.MustCompile(`(?m)^\s*SleepDisabled\s+(\d)`)
-
-	ErrNoClamshell = errors.New("AppleClamshellState not found (not a laptop?)")
 )
 
+// MacOS reads lid state and controls sleep using ioreg and pmset.
+type MacOS struct{}
+
+// IsClosed reports whether the laptop lid is closed.
 func (MacOS) IsClosed(ctx context.Context) (bool, error) {
-	out, err := exec.CommandContext(ctx, "/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState", "-d", "4").Output()
+	out, err := output(ctx, "/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState", "-d", "4")
 	if err != nil {
 		return false, fmt.Errorf("ioreg: %w", err)
 	}
-	return ParseClamshellState(out)
+	return parseClamshellState(out)
 }
 
+// SetSleepDisabled sets the system-wide "disablesleep" flag.
 func (MacOS) SetSleepDisabled(ctx context.Context, disabled bool) error {
 	value := "0"
 	if disabled {
 		value = "1"
 	}
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
 	out, err := exec.CommandContext(ctx, "/usr/bin/pmset", "-a", "disablesleep", value).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pmset -a disablesleep %s: %w: %s", value, err, strings.TrimSpace(string(out)))
@@ -51,25 +50,32 @@ func (MacOS) SetSleepDisabled(ctx context.Context, disabled bool) error {
 	return nil
 }
 
+// SleepDisabled reports the current system-wide "disablesleep" flag.
 func (MacOS) SleepDisabled(ctx context.Context) (bool, error) {
-	out, err := exec.CommandContext(ctx, "/usr/bin/pmset", "-g").Output()
+	out, err := output(ctx, "/usr/bin/pmset", "-g")
 	if err != nil {
 		return false, fmt.Errorf("pmset -g: %w", err)
 	}
-	return ParseSleepDisabled(out), nil
+	return parseSleepDisabled(out), nil
 }
 
 // BootSessionID returns an identifier that changes on every boot.
 func BootSessionID(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "/usr/sbin/sysctl", "-n", "kern.bootsessionuuid").Output()
+	out, err := output(ctx, "/usr/sbin/sysctl", "-n", "kern.bootsessionuuid")
 	if err != nil {
 		return "", fmt.Errorf("sysctl kern.bootsessionuuid: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ParseClamshellState extracts lid state from ioreg output. true = closed.
-func ParseClamshellState(out []byte) (bool, error) {
+func output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
+// parseClamshellState extracts lid state from ioreg output. true = closed.
+func parseClamshellState(out []byte) (bool, error) {
 	m := clamshellRe.FindSubmatch(out)
 	if m == nil {
 		return false, ErrNoClamshell
@@ -77,9 +83,9 @@ func ParseClamshellState(out []byte) (bool, error) {
 	return string(m[1]) == "Yes", nil
 }
 
-// ParseSleepDisabled extracts SleepDisabled from `pmset -g` output.
+// parseSleepDisabled extracts SleepDisabled from `pmset -g` output.
 // Missing line is treated as not disabled.
-func ParseSleepDisabled(out []byte) bool {
+func parseSleepDisabled(out []byte) bool {
 	m := sleepDisabledRe.FindSubmatch(out)
 	return m != nil && string(m[1]) == "1"
 }

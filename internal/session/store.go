@@ -20,6 +20,7 @@ type FileStore struct {
 	Path string
 }
 
+// Load reads the state file. A missing file is an empty, inactive state.
 func (s FileStore) Load() (State, error) {
 	data, err := os.ReadFile(s.Path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -35,29 +36,39 @@ func (s FileStore) Load() (State, error) {
 	return st, nil
 }
 
+// Save writes st to a temp file, syncs it, and renames it over Path.
 func (s FileStore) Save(st State) error {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("encode state: %w", err)
 	}
 	tmp := s.Path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
+	if err := writeSynced(tmp, data); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write state: %w", err)
+	}
+	if err := os.Rename(tmp, s.Path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("replace state: %w", err)
+	}
+	return nil
+}
+
+func writeSynced(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return fmt.Errorf("write state: %w", err)
+		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return fmt.Errorf("sync state: %w", err)
-	}
-	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.Path)
+	return f.Close()
 }

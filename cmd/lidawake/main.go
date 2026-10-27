@@ -1,4 +1,4 @@
-// lidawake: keep a Mac awake with the lid closed, once.
+// Lidawake keeps a Mac awake with the lid closed, once.
 // Sleep is re-enabled automatically when the lid is reopened.
 package main
 
@@ -29,11 +29,11 @@ var version = "dev"
 const usage = `lidawake - stay awake with lid closed, until lid reopens
 
 Usage:
-  lidawake start [-max 12h]   disable sleep until lid closes and reopens (or max elapses)
-  lidawake stop               end session now, re-enable sleep
-  lidawake status [-json]     show session and pmset state
-  sudo lidawake install       install binary + launchd daemon
-  sudo lidawake uninstall     remove everything, re-enable sleep
+  lidawake start [-max 12h]       disable sleep until lid closes and reopens (or max elapses)
+  lidawake stop                   end session now, re-enable sleep
+  lidawake status [-json]         show session and pmset state
+  sudo lidawake install [-uid N]  install binary + launchd daemon
+  sudo lidawake uninstall         remove everything, re-enable sleep
   lidawake version
 `
 
@@ -79,7 +79,7 @@ func runStart(args []string) error {
 		return err
 	}
 
-	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds())})
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds())})
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func runStop(args []string) error {
 	if err := parseFlags(newFlagSet("stop"), args); err != nil {
 		return err
 	}
-	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStop})
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStop})
 	if err != nil {
 		return err
 	}
@@ -113,9 +113,12 @@ func runStatus(args []string) error {
 		return err
 	}
 
-	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStatus})
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStatus})
 	if err != nil {
 		return err
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
 	}
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -194,14 +197,14 @@ func runDaemon(args []string) error {
 		return errors.New("daemon must run as root")
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
 	mac := power.MacOS{}
 	boot, err := power.BootSessionID(ctx)
 	if err != nil {
-		log.Warn("boot session id unavailable, reboot detection off", "err", err)
+		logger.Warn("boot session id unavailable; sessions will not survive a daemon restart", "err", err)
 	}
 
 	mgr := session.NewManager(session.Config{
@@ -209,16 +212,16 @@ func runDaemon(args []string) error {
 		Lid:         mac,
 		Sleep:       mac,
 		BootSession: boot,
-		Log:         log,
+		Log:         logger,
 	})
 	d := daemon.New(daemon.Config{
 		SocketPath:   *socket,
 		AllowUID:     *allowUID,
 		PollInterval: *poll,
 		MaxAllowed:   72 * time.Hour,
-	}, mgr, mac, log)
+	}, mgr, mac, logger)
 
-	log.Info("lidawake daemon starting", "version", buildVersion())
+	logger.Info("lidawake daemon starting", "version", buildVersion())
 	return d.Run(ctx)
 }
 

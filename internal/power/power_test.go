@@ -18,7 +18,7 @@ func TestParseClamshellState(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := ParseClamshellState([]byte(c.in))
+			got, err := parseClamshellState([]byte(c.in))
 			if !errors.Is(err, c.wantErr) {
 				t.Fatalf("err = %v, want %v", err, c.wantErr)
 			}
@@ -32,13 +32,13 @@ func TestParseClamshellState(t *testing.T) {
 func TestParseSleepDisabled(t *testing.T) {
 	on := "System-wide power settings:\n SleepDisabled\t\t1\nCurrently in use:\n"
 	off := "System-wide power settings:\n SleepDisabled\t\t0\n"
-	if !ParseSleepDisabled([]byte(on)) {
+	if !parseSleepDisabled([]byte(on)) {
 		t.Fatal("expected disabled")
 	}
-	if ParseSleepDisabled([]byte(off)) {
+	if parseSleepDisabled([]byte(off)) {
 		t.Fatal("expected enabled")
 	}
-	if ParseSleepDisabled([]byte("Currently in use:\n")) {
+	if parseSleepDisabled([]byte("Currently in use:\n")) {
 		t.Fatal("missing line should mean enabled")
 	}
 }
