@@ -16,13 +16,29 @@ import (
 	"github.com/ame180/lidawake/internal/power"
 )
 
+// EndReason records why a session ended.
+type EndReason string
+
+// End reasons stored in State.LastEndReason.
 const (
-	EndLidOpened = "lid-opened"
-	EndDeadline  = "deadline"
-	EndStopped   = "stopped"
-	EndReboot    = "reboot"
+	EndLidOpened   EndReason = "lid-opened"
+	EndDeadline    EndReason = "deadline"
+	EndStopped     EndReason = "stopped"
+	EndReboot      EndReason = "reboot"
+	EndStartFailed EndReason = "start-failed"
 )
 
+// Lid reports whether the laptop lid is closed.
+type Lid interface {
+	IsClosed(ctx context.Context) (bool, error)
+}
+
+// SleepSetter sets the system-wide "disablesleep" flag.
+type SleepSetter interface {
+	SetSleepDisabled(ctx context.Context, disabled bool) error
+}
+
+// State is the persisted session state.
 type State struct {
 	Active      bool      `json:"active"`
 	SeenClosed  bool      `json:"seenClosed"`
@@ -30,35 +46,42 @@ type State struct {
 	Deadline    time.Time `json:"deadline,omitzero"`
 	BootSession string    `json:"bootSession,omitempty"`
 
-	LastEndReason string    `json:"lastEndReason,omitempty"`
+	LastEndReason EndReason `json:"lastEndReason,omitempty"`
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
 }
 
+// ErrNotActive is returned by Stop when no session is running.
 var ErrNotActive = errors.New("no active session")
 
+// Manager runs the session state machine. It is safe for concurrent use.
 type Manager struct {
 	mu          sync.Mutex
 	state       State
 	store       Store
-	lid         power.Lid
-	sleep       power.SleepControl
+	lid         Lid
+	sleep       SleepSetter
 	now         func() time.Time
 	bootSession string
 	log         *slog.Logger
 
 	// needClear is set when pmset failed to re-enable sleep; Tick retries.
 	needClear bool
+	// needSave is set when the in-memory state failed to persist; Tick retries.
+	needSave bool
 }
 
+// Config holds Manager dependencies. Now and Log are optional.
 type Config struct {
-	Store       Store
-	Lid         power.Lid
-	Sleep       power.SleepControl
-	Now         func() time.Time
+	Store Store
+	Lid   Lid
+	Sleep SleepSetter
+	Now   func() time.Time
+	// BootSession identifies the current boot; see power.BootSessionID.
 	BootSession string
 	Log         *slog.Logger
 }
 
+// NewManager returns a Manager with no loaded state; call Recover first.
 func NewManager(c Config) *Manager {
 	if c.Now == nil {
 		c.Now = time.Now
@@ -94,8 +117,9 @@ func (m *Manager) Recover(ctx context.Context) error {
 	case !st.Active:
 		m.log.Info("no active session, ensuring sleep enabled")
 		return m.clearSleepLocked(ctx)
-	case st.BootSession != "" && m.bootSession != "" && st.BootSession != m.bootSession:
-		m.log.Info("session from previous boot, ending")
+	case st.BootSession == "" || m.bootSession == "" || st.BootSession != m.bootSession:
+		// Unknown boot ID on either side counts as a reboot: fail safe.
+		m.log.Info("session from previous or unknown boot, ending")
 		return m.endLocked(ctx, EndReboot)
 	case !m.now().Before(st.Deadline):
 		m.log.Info("session deadline passed while daemon was down, ending")
@@ -114,6 +138,10 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration) (State, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if _, err := m.lid.IsClosed(ctx); errors.Is(err, power.ErrNoClamshell) {
+		return m.state, err
+	}
+
 	now := m.now()
 	next := m.state
 	next.Active = true
@@ -122,14 +150,14 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration) (State, 
 	next.Deadline = now.Add(maxDuration)
 	next.BootSession = m.bootSession
 
-	if err := m.store.Save(next); err != nil {
+	if err := m.saveLocked(next); err != nil {
 		return m.state, err
 	}
 	m.state = next
 	m.needClear = false
 	if err := m.sleep.SetSleepDisabled(ctx, true); err != nil {
 		// Roll back so state does not claim sleep is disabled.
-		_ = m.endLocked(ctx, EndStopped)
+		_ = m.endLocked(ctx, EndStartFailed)
 		return m.state, err
 	}
 	m.log.Info("session started", "deadline", next.Deadline)
@@ -157,6 +185,11 @@ func (m *Manager) Tick(ctx context.Context) {
 			m.log.Error("retry re-enable sleep failed", "err", err)
 		}
 	}
+	if m.needSave {
+		if err := m.saveLocked(m.state); err != nil {
+			m.log.Error("retry persist state failed", "err", err)
+		}
+	}
 	if !m.state.Active {
 		return
 	}
@@ -174,7 +207,7 @@ func (m *Manager) Tick(ctx context.Context) {
 	case closed && !m.state.SeenClosed:
 		next := m.state
 		next.SeenClosed = true
-		if err := m.store.Save(next); err != nil {
+		if err := m.saveLocked(next); err != nil {
 			m.log.Error("persist seenClosed failed", "err", err)
 			return
 		}
@@ -185,6 +218,7 @@ func (m *Manager) Tick(ctx context.Context) {
 	}
 }
 
+// Status returns a snapshot of the current state.
 func (m *Manager) Status() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -193,18 +227,29 @@ func (m *Manager) Status() State {
 
 // endLocked persists the end first, then re-enables sleep.
 // Crash between the two: Recover sees inactive state and clears sleep.
-func (m *Manager) endLocked(ctx context.Context, reason string) error {
+func (m *Manager) endLocked(ctx context.Context, reason EndReason) error {
 	next := m.state
 	next.Active = false
 	next.SeenClosed = false
 	next.LastEndReason = reason
 	next.LastEndedAt = m.now()
-	if err := m.store.Save(next); err != nil {
-		m.log.Error("persist end failed", "err", err)
+	if err := m.saveLocked(next); err != nil {
+		m.log.Error("persist end failed, will retry", "err", err)
 		// Still re-enable sleep; safety beats bookkeeping.
+		m.needSave = true
 	}
 	m.state = next
 	return m.clearSleepLocked(ctx)
+}
+
+// saveLocked persists st. On success the store matches st, so any pending
+// retry of an earlier failed save is no longer needed.
+func (m *Manager) saveLocked(st State) error {
+	if err := m.store.Save(st); err != nil {
+		return err
+	}
+	m.needSave = false
+	return nil
 }
 
 func (m *Manager) clearSleepLocked(ctx context.Context) error {
@@ -216,7 +261,7 @@ func (m *Manager) clearSleepLocked(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) logEnd(err error, reason string) {
+func (m *Manager) logEnd(err error, reason EndReason) {
 	if err != nil {
 		m.log.Error("session ended but re-enabling sleep failed, will retry", "reason", reason, "err", err)
 		return

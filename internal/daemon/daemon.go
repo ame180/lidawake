@@ -2,7 +2,6 @@
 package daemon
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,11 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ame180/lidawake/internal/power"
 	"github.com/ame180/lidawake/internal/rpc"
 	"github.com/ame180/lidawake/internal/session"
 )
 
+// requestTimeout bounds one client request, including socket I/O and pmset.
+const requestTimeout = 10 * time.Second
+
+// Config holds daemon settings.
 type Config struct {
 	SocketPath   string
 	AllowUID     int // socket owner; -1 = root only
@@ -27,19 +29,27 @@ type Config struct {
 	MaxAllowed   time.Duration
 }
 
+// SleepReader reports the live system-wide "disablesleep" flag.
+type SleepReader interface {
+	SleepDisabled(ctx context.Context) (bool, error)
+}
+
+// Daemon serves the control socket and drives the session poll loop.
 type Daemon struct {
 	cfg   Config
 	mgr   *session.Manager
-	sleep power.SleepControl
+	sleep SleepReader
 	log   *slog.Logger
 }
 
-func New(cfg Config, mgr *session.Manager, sleep power.SleepControl, log *slog.Logger) *Daemon {
-	return &Daemon{cfg: cfg, mgr: mgr, sleep: sleep, log: log}
+// New returns a Daemon; call Run to start it.
+func New(cfg Config, mgr *session.Manager, sleep SleepReader, logger *slog.Logger) *Daemon {
+	return &Daemon{cfg: cfg, mgr: mgr, sleep: sleep, log: logger}
 }
 
-// Run blocks until ctx is cancelled. Exiting does not touch pmset:
-// launchd KeepAlive restarts the daemon and Recover resumes the session.
+// Run recovers persisted state, then serves until ctx is cancelled and all
+// in-flight requests finish. Exiting does not touch pmset: launchd KeepAlive
+// restarts the daemon and Recover resumes the session.
 func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.mgr.Recover(ctx); err != nil {
 		d.log.Error("recover", "err", err)
@@ -71,9 +81,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 				break
 			}
 			d.log.Warn("accept", "err", err)
+			// Avoid spinning on persistent errors such as EMFILE.
+			select {
+			case <-ctx.Done():
+			case <-time.After(100 * time.Millisecond):
+			}
 			continue
 		}
-		go d.handle(ctx, conn)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// A request accepted before shutdown still completes.
+			reqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
+			defer cancel()
+			d.handle(reqCtx, conn)
+		}()
 	}
 	wg.Wait()
 	return nil
@@ -117,11 +139,13 @@ func (d *Daemon) pollLoop(ctx context.Context) {
 
 func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 
 	var req rpc.Request
 	// Requests are a few dozen bytes; cap to avoid unbounded reads.
-	if err := json.NewDecoder(bufio.NewReader(io.LimitReader(conn, 4096))).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&req); err != nil {
 		d.reply(conn, rpc.Response{Error: "bad request: " + err.Error()})
 		return
 	}
@@ -129,12 +153,12 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 	var err error
 	switch req.Cmd {
 	case rpc.CmdStart:
-		maxDuration := time.Duration(req.MaxSeconds) * time.Second
-		if maxDuration <= 0 || maxDuration > d.cfg.MaxAllowed {
+		// Compare in seconds: multiplying first could overflow into range.
+		if req.MaxSeconds <= 0 || req.MaxSeconds > int64(d.cfg.MaxAllowed/time.Second) {
 			err = fmt.Errorf("max duration must be between 1s and %s", d.cfg.MaxAllowed)
 			break
 		}
-		_, err = d.mgr.Start(ctx, maxDuration)
+		_, err = d.mgr.Start(ctx, time.Duration(req.MaxSeconds)*time.Second)
 	case rpc.CmdStop:
 		_, err = d.mgr.Stop(ctx)
 	case rpc.CmdStatus:
@@ -161,7 +185,7 @@ func (d *Daemon) status(ctx context.Context) rpc.Status {
 		StartedAt:     st.StartedAt,
 		Deadline:      st.Deadline,
 		SleepDisabled: disabled,
-		LastEndReason: st.LastEndReason,
+		LastEndReason: string(st.LastEndReason),
 		LastEndedAt:   st.LastEndedAt,
 	}
 }
