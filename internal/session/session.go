@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"lidawake/internal/power"
+	"github.com/ame180/lidawake/internal/power"
 )
 
 const (

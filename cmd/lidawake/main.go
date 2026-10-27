@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"lidawake/internal/daemon"
-	"lidawake/internal/install"
-	"lidawake/internal/power"
-	"lidawake/internal/rpc"
-	"lidawake/internal/session"
+	"github.com/ame180/lidawake/internal/daemon"
+	"github.com/ame180/lidawake/internal/install"
+	"github.com/ame180/lidawake/internal/power"
+	"github.com/ame180/lidawake/internal/rpc"
+	"github.com/ame180/lidawake/internal/session"
 )
 
 var version = "dev"
