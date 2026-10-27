@@ -73,10 +73,10 @@ func main() {
 
 func runStart(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
-	max := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
+	maxDuration := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
 	_ = fs.Parse(args)
 
-	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(max.Seconds())})
+	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds())})
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func runStart(args []string) error {
 		return errors.New(resp.Error)
 	}
 	fmt.Printf("Sleep disabled. Close the lid; reopening it re-enables sleep.\nDeadline: %s (%s)\n",
-		resp.Status.Deadline.Local().Format("Mon 15:04"), max)
+		resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
 	return nil
 }
 
