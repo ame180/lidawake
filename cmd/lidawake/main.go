@@ -11,16 +11,19 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
-	"lidawake/internal/daemon"
-	"lidawake/internal/install"
-	"lidawake/internal/power"
-	"lidawake/internal/rpc"
-	"lidawake/internal/session"
+	"github.com/ame180/lidawake/internal/daemon"
+	"github.com/ame180/lidawake/internal/install"
+	"github.com/ame180/lidawake/internal/power"
+	"github.com/ame180/lidawake/internal/rpc"
+	"github.com/ame180/lidawake/internal/session"
 )
 
+// version is set by -ldflags "-X main.version=..."; see buildVersion for the fallback.
 var version = "dev"
 
 const usage = `lidawake - stay awake with lid closed, until lid reopens
@@ -46,17 +49,17 @@ func main() {
 	case "start":
 		err = runStart(args)
 	case "stop":
-		err = runStop()
+		err = runStop(args)
 	case "status":
 		err = runStatus(args)
 	case "install":
 		err = runInstall(args)
 	case "uninstall":
-		err = install.Uninstall(context.Background(), os.Stdout)
+		err = runUninstall(args)
 	case "daemon":
 		err = runDaemon(args)
 	case "version":
-		fmt.Println(version)
+		err = runVersion(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -70,11 +73,13 @@ func main() {
 }
 
 func runStart(args []string) error {
-	fs := flag.NewFlagSet("start", flag.ExitOnError)
-	max := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
-	_ = fs.Parse(args)
+	fs := newFlagSet("start [-max 12h]")
+	maxDuration := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 
-	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(max.Seconds())})
+	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds())})
 	if err != nil {
 		return err
 	}
@@ -82,11 +87,14 @@ func runStart(args []string) error {
 		return errors.New(resp.Error)
 	}
 	fmt.Printf("Sleep disabled. Close the lid; reopening it re-enables sleep.\nDeadline: %s (%s)\n",
-		resp.Status.Deadline.Local().Format("Mon 15:04"), max)
+		resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
 	return nil
 }
 
-func runStop() error {
+func runStop(args []string) error {
+	if err := parseFlags(newFlagSet("stop"), args); err != nil {
+		return err
+	}
 	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStop})
 	if err != nil {
 		return err
@@ -99,9 +107,11 @@ func runStop() error {
 }
 
 func runStatus(args []string) error {
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	fs := newFlagSet("status [-json]")
 	asJSON := fs.Bool("json", false, "print raw JSON")
-	_ = fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 
 	resp, err := rpc.Call(install.SocketPath, rpc.Request{Cmd: rpc.CmdStatus})
 	if err != nil {
@@ -139,9 +149,11 @@ func printStatus(s rpc.Status) {
 }
 
 func runInstall(args []string) error {
-	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	fs := newFlagSet("install [-uid N]")
 	uid := fs.Int("uid", -1, "user allowed to run start/stop/status without sudo (default: $SUDO_UID)")
-	_ = fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 
 	if *uid < 0 {
 		u, err := install.TargetUID()
@@ -153,13 +165,30 @@ func runInstall(args []string) error {
 	return install.Install(context.Background(), *uid, os.Stdout)
 }
 
+func runUninstall(args []string) error {
+	if err := parseFlags(newFlagSet("uninstall"), args); err != nil {
+		return err
+	}
+	return install.Uninstall(context.Background(), os.Stdout)
+}
+
+func runVersion(args []string) error {
+	if err := parseFlags(newFlagSet("version"), args); err != nil {
+		return err
+	}
+	fmt.Println(buildVersion())
+	return nil
+}
+
 func runDaemon(args []string) error {
-	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
+	fs := newFlagSet("daemon [flags]")
 	allowUID := fs.Int("allow-uid", -1, "uid that owns the control socket")
 	socket := fs.String("socket", install.SocketPath, "control socket path")
 	statePath := fs.String("state", install.StatePath, "state file path")
 	poll := fs.Duration("poll", 5*time.Second, "lid poll interval")
-	_ = fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 
 	if os.Geteuid() != 0 {
 		return errors.New("daemon must run as root")
@@ -189,8 +218,41 @@ func runDaemon(args []string) error {
 		MaxAllowed:   72 * time.Hour,
 	}, mgr, mac, log)
 
-	log.Info("lidawake daemon starting", "version", version)
+	log.Info("lidawake daemon starting", "version", buildVersion())
 	return d.Run(ctx)
+}
+
+// newFlagSet returns a flag set whose -h output starts with the given synopsis,
+// e.g. "start [-max 12h]"; the first word is the subcommand name.
+func newFlagSet(synopsis string) *flag.FlagSet {
+	name, _, _ := strings.Cut(synopsis, " ")
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage: lidawake %s\n", synopsis)
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
+// parseFlags parses args and rejects leftover positional arguments.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		return fmt.Errorf("%s: unexpected argument %q", fs.Name(), fs.Arg(0))
+	}
+	return nil
+}
+
+// buildVersion falls back to the module version recorded by `go install module@version`.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return version
+	}
+	return info.Main.Version
 }
 
 func boolInt(b bool) int {

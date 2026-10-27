@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"lidawake/internal/power"
-	"lidawake/internal/rpc"
-	"lidawake/internal/session"
+	"github.com/ame180/lidawake/internal/power"
+	"github.com/ame180/lidawake/internal/rpc"
+	"github.com/ame180/lidawake/internal/session"
 )
 
 type Config struct {
@@ -129,12 +129,12 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 	var err error
 	switch req.Cmd {
 	case rpc.CmdStart:
-		max := time.Duration(req.MaxSeconds) * time.Second
-		if max <= 0 || max > d.cfg.MaxAllowed {
+		maxDuration := time.Duration(req.MaxSeconds) * time.Second
+		if maxDuration <= 0 || maxDuration > d.cfg.MaxAllowed {
 			err = fmt.Errorf("max duration must be between 1s and %s", d.cfg.MaxAllowed)
 			break
 		}
-		_, err = d.mgr.Start(ctx, max)
+		_, err = d.mgr.Start(ctx, maxDuration)
 	case rpc.CmdStop:
 		_, err = d.mgr.Stop(ctx)
 	case rpc.CmdStatus:

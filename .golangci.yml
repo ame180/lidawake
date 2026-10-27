@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  enable:
+    - errorlint
+    - misspell
+    - predeclared
+  exclusions:
+    presets:
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ame180/lidawake

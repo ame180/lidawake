@@ -23,9 +23,11 @@ Crash / restart behaviour (daemon start):
 
 ## Install
 
+Requires Go 1.24+.
+
 ```sh
-make test
-make install          # builds, then: sudo ./dist/lidawake install
+make build
+sudo ./dist/lidawake install
 ```
 
 Puts binary in `/usr/local/bin/lidawake`, plist in `/Library/LaunchDaemons/`, bootstraps it.
@@ -52,3 +54,16 @@ sudo lidawake uninstall   # bootout, remove files, disablesleep 0
 - Daemon clears `disablesleep` on every start when no session is active. A manual `sudo pmset -a disablesleep 1` will be reset at next boot/daemon restart.
 - Closed lid traps heat. On battery, a session runs until battery dies or deadline.
 - `uninstall` removes `/usr/local/bin/lidawake` — run it from that path or from the build.
+- Installed binary is root-owned, but `/usr/local/bin` may be user-writable (e.g. Intel Homebrew). Moving the daemon binary to a root-only path is planned.
+
+## Development
+
+```sh
+make test     # go vet + go test
+make lint     # golangci-lint (brew install golangci-lint)
+make build    # dist/lidawake, version from git describe
+```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
