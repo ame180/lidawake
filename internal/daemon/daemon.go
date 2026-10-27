@@ -18,8 +18,9 @@ import (
 	"github.com/ame180/lidawake/internal/session"
 )
 
-// requestTimeout bounds one client request, including socket I/O and pmset.
-const requestTimeout = 10 * time.Second
+// requestTimeout bounds one client request, including socket I/O and the
+// ioreg/pmset calls it makes (each bounded separately in package power).
+const requestTimeout = 25 * time.Second
 
 // Config holds daemon settings.
 type Config struct {

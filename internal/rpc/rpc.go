@@ -48,7 +48,7 @@ type Response struct {
 
 // Call sends one request and waits for the response.
 func Call(ctx context.Context, socketPath string, req Request) (Response, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	var dialer net.Dialer

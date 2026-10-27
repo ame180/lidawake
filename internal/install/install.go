@@ -62,8 +62,8 @@ var plistTmpl = template.Must(template.New("plist").Parse(`<?xml version="1.0" e
 // Install copies the running binary into place and (re)loads the daemon.
 // allowUID is the user allowed to use the CLI without sudo.
 //
-// Files are written while the old daemon keeps running, so a failure there
-// leaves the existing install untouched.
+// Files are written while the old daemon keeps running, so a failure before
+// bootstrap leaves the old daemon running.
 func Install(ctx context.Context, allowUID int, out io.Writer) error {
 	if err := requireRoot(); err != nil {
 		return err
@@ -95,10 +95,15 @@ func Install(ctx context.Context, allowUID int, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "plist   -> %s\n", plistPath)
 
-	// Unload old version; ignore "not loaded".
-	_ = launchctl(ctx, "bootout", "system/"+label)
+	// Unload old version. Fails when not loaded, which is fine.
+	bootoutErr := launchctl(ctx, "bootout", "system/"+label)
 	if err := launchctl(ctx, "bootstrap", "system", plistPath); err != nil {
-		// No daemon is running now; do not leave sleep disabled.
+		if bootoutErr != nil {
+			// Old daemon may still be running and owning sleep state.
+			return err
+		}
+		// Old daemon was unloaded and the new one is not running; do not
+		// leave sleep disabled.
 		if clearErr := (power.MacOS{}).SetSleepDisabled(ctx, false); clearErr != nil {
 			return errors.Join(err, fmt.Errorf("re-enable sleep: %w", clearErr))
 		}
