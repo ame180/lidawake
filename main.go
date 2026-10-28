@@ -91,8 +91,8 @@ func runStart(args []string) error {
 	if !resp.OK {
 		return errors.New(resp.Error)
 	}
-	if *ignoreLid {
-		fmt.Println("Sleep disabled. Lid ignored; runs until the deadline or stop.")
+	if resp.Status.IgnoreLid {
+		fmt.Println("Sleep disabled. Lid ignored; runs until the deadline, battery cutoff, or stop.")
 	} else {
 		fmt.Println("Sleep disabled. Close the lid; reopening it re-enables sleep.")
 	}
@@ -144,7 +144,7 @@ func printStatus(s rpc.Status) {
 		phase := "waiting for lid to close"
 		switch {
 		case s.IgnoreLid:
-			phase = "lid ignored, waiting for deadline"
+			phase = "lid ignored"
 		case s.SeenClosed:
 			phase = "lid closed, waiting for reopen"
 		}

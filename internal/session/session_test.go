@@ -437,16 +437,16 @@ func TestRecoverKeepsIgnoreLid(t *testing.T) {
 	if _, err := h.m.Start(ctx, 8*time.Hour, 20, true); err != nil {
 		t.Fatal(err)
 	}
-	h.lid.closed = true
-	h.m.Tick(ctx)
 
 	m2 := h.newManager("boot-1")
 	if err := m2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
+	h.lid.closed = true
+	m2.Tick(ctx)
 	h.lid.closed = false
 	m2.Tick(ctx)
-	if !m2.Status().Active {
-		t.Fatal("resumed session should keep ignoring the lid")
+	if st := m2.Status(); !st.Active || !st.IgnoreLid {
+		t.Fatalf("resumed session should keep ignoring the lid: %+v", st)
 	}
 }
