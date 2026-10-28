@@ -22,10 +22,12 @@ const (
 	CmdStatus Command = "status"
 )
 
-// Request is sent by the CLI. MaxSeconds applies to CmdStart only.
+// Request is sent by the CLI. MaxSeconds and MinBattery apply to CmdStart only.
+// MinBattery 0 disables the battery cutoff.
 type Request struct {
 	Cmd        Command `json:"cmd"`
 	MaxSeconds int64   `json:"maxSeconds,omitempty"`
+	MinBattery int     `json:"minBattery"`
 }
 
 // Status describes the session and the live pmset flag.
@@ -34,6 +36,7 @@ type Status struct {
 	SeenClosed    bool      `json:"seenClosed"`
 	StartedAt     time.Time `json:"startedAt,omitzero"`
 	Deadline      time.Time `json:"deadline,omitzero"`
+	MinBattery    int       `json:"minBattery"`
 	SleepDisabled bool      `json:"sleepDisabled"`
 	LastEndReason string    `json:"lastEndReason,omitempty"`
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`

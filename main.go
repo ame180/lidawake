@@ -29,7 +29,9 @@ var version = "dev"
 const usage = `lidawake - stay awake with lid closed, until lid reopens
 
 Usage:
-  lidawake start [-max 12h]       disable sleep until lid closes and reopens (or max elapses)
+  lidawake start [-max 12h] [-min-battery 20]
+                                  disable sleep until lid closes and reopens
+                                  (or max elapses, or battery drops below min)
   lidawake stop                   end session now, re-enable sleep
   lidawake status [-json]         show session and pmset state
   sudo lidawake install [-uid N]  install binary + launchd daemon
@@ -73,13 +75,14 @@ func main() {
 }
 
 func runStart(args []string) error {
-	fs := newFlagSet("start [-max 12h]")
+	fs := newFlagSet("start [-max 12h] [-min-battery 20]")
 	maxDuration := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
+	minBattery := fs.Int("min-battery", 20, "end session when on battery below this percent; 0 disables")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds())})
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds()), MinBattery: *minBattery})
 	if err != nil {
 		return err
 	}
@@ -88,6 +91,7 @@ func runStart(args []string) error {
 	}
 	fmt.Printf("Sleep disabled. Close the lid; reopening it re-enables sleep.\nDeadline: %s (%s)\n",
 		resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
+	fmt.Printf("Battery cutoff: %s\n", batteryCutoff(resp.Status.MinBattery))
 	return nil
 }
 
@@ -139,6 +143,7 @@ func printStatus(s rpc.Status) {
 		fmt.Printf("Started:   %s\n", s.StartedAt.Local().Format("Mon 15:04"))
 		fmt.Printf("Deadline:  %s (in %s)\n", s.Deadline.Local().Format("Mon 15:04"),
 			time.Until(s.Deadline).Round(time.Minute))
+		fmt.Printf("Battery:   cutoff %s\n", batteryCutoff(s.MinBattery))
 	} else {
 		fmt.Println("Session:   none")
 		if s.LastEndReason != "" {
@@ -149,6 +154,13 @@ func printStatus(s rpc.Status) {
 	if !s.Active && s.SleepDisabled {
 		fmt.Println("WARNING: sleep disabled outside a session. Fix: sudo pmset -a disablesleep 0")
 	}
+}
+
+func batteryCutoff(minBattery int) string {
+	if minBattery <= 0 {
+		return "off"
+	}
+	return fmt.Sprintf("below %d%% on battery", minBattery)
 }
 
 func runInstall(args []string) error {
@@ -211,6 +223,7 @@ func runDaemon(args []string) error {
 		Store:       session.FileStore{Path: *statePath},
 		Lid:         mac,
 		Sleep:       mac,
+		Battery:     mac,
 		BootSession: boot,
 		Log:         logger,
 	})
