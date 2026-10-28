@@ -11,4 +11,4 @@ lint:
 	golangci-lint run
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o dist/lidawake ./cmd/lidawake
+	go build -ldflags "$(LDFLAGS)" -o dist/lidawake .
