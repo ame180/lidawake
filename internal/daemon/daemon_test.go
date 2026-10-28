@@ -83,8 +83,8 @@ func TestSocketRoundTrip(t *testing.T) {
 		t.Fatalf("start over MaxAllowed should fail: %+v %v", resp, err)
 	}
 
-	resp, err = rpc.Call(ctx, td.sock, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: 60})
-	if err != nil || !resp.OK || !resp.Status.Active || !resp.Status.SleepDisabled {
+	resp, err = rpc.Call(ctx, td.sock, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: 60, MinBattery: 20})
+	if err != nil || !resp.OK || !resp.Status.Active || !resp.Status.SleepDisabled || resp.Status.MinBattery != 20 {
 		t.Fatalf("start: %+v %v", resp, err)
 	}
 
