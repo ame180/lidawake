@@ -25,12 +25,23 @@ Crash / restart behaviour (daemon start):
 
 Requires Go 1.24+.
 
+With `go install`:
+
+```sh
+go install github.com/ame180/lidawake@latest
+sudo "$(go env GOPATH)/bin/lidawake" install
+```
+
+Use the full path: `sudo` won't find `~/go/bin`. If you set `GOBIN`, use that directory instead. To upgrade, run both again.
+
+From a clone:
+
 ```sh
 make build
 sudo ./dist/lidawake install
 ```
 
-Puts binary in `/usr/local/bin/lidawake`, plist in `/Library/LaunchDaemons/`, bootstraps it.
+`install` puts binary in `/usr/local/bin/lidawake`, plist in `/Library/LaunchDaemons/`, bootstraps it.
 
 ## Use
 
