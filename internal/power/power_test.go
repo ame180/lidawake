@@ -42,3 +42,30 @@ func TestParseSleepDisabled(t *testing.T) {
 		t.Fatal("missing line should mean enabled")
 	}
 }
+
+func TestParseBattery(t *testing.T) {
+	cases := []struct {
+		name      string
+		in        string
+		percent   int
+		onBattery bool
+		wantErr   bool
+	}{
+		{"battery", "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=34668643)\t91%; discharging; 20:00 remaining present: true\n", 91, true, false},
+		{"ac", "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34668643)\t15%; charging; 1:20 remaining present: true\n", 15, false, false},
+		{"ups", "Now drawing from 'UPS Power'\n -InternalBattery-0 (id=1)\t5%; discharging; present: true\n", 5, false, false},
+		{"no source", " -InternalBattery-0 (id=1)\t5%; discharging; present: true\n", 0, false, true},
+		{"no battery", "Now drawing from 'AC Power'\n", 0, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			percent, onBattery, err := parseBattery([]byte(c.in))
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, c.wantErr)
+			}
+			if percent != c.percent || onBattery != c.onBattery {
+				t.Fatalf("got (%d, %v), want (%d, %v)", percent, onBattery, c.percent, c.onBattery)
+			}
+		})
+	}
+}
