@@ -29,6 +29,10 @@ func (f *fakeSleep) SetSleepDisabled(_ context.Context, v bool) error {
 }
 func (f *fakeSleep) SleepDisabled(context.Context) (bool, error) { return f.disabled.Load(), nil }
 
+type fakeBattery struct{}
+
+func (fakeBattery) Battery(context.Context) (int, bool, error) { return 100, false, nil }
+
 type testDaemon struct {
 	sock string
 	lid  *fakeLid
@@ -45,7 +49,7 @@ func startDaemon(t *testing.T) *testDaemon {
 
 	td.mgr = session.NewManager(session.Config{
 		Store: session.FileStore{Path: filepath.Join(dir, "state.json")},
-		Lid:   td.lid, Sleep: sleep, Log: logger,
+		Lid:   td.lid, Sleep: sleep, Battery: fakeBattery{}, Log: logger,
 	})
 	d := New(Config{SocketPath: td.sock, AllowUID: -1, PollInterval: 10 * time.Millisecond, MaxAllowed: time.Hour}, td.mgr, sleep, logger)
 
@@ -107,6 +111,8 @@ func TestRejectedRequests(t *testing.T) {
 		{"bad json", "{nope\n"},
 		{"unknown command", `{"cmd":"reboot"}` + "\n"},
 		{"overflowing max", `{"cmd":"start","maxSeconds":9223372036854775807}` + "\n"},
+		{"negative min battery", `{"cmd":"start","maxSeconds":60,"minBattery":-1}` + "\n"},
+		{"min battery 100", `{"cmd":"start","maxSeconds":60,"minBattery":100}` + "\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

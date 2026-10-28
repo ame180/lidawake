@@ -8,6 +8,7 @@ Keep a MacBook awake with the lid closed — once. Reopening the lid re-enables 
 - CLI talks to it over `/var/run/lidawake.sock` (mode 0600, owned by the installing user, so no `sudo` needed for start/stop/status).
 - Session: `start` → `pmset -a disablesleep 1` → poll `AppleClamshellState` every 5 s → lid closed (recorded) → lid opened → `pmset -a disablesleep 0`.
 - Safety deadline (`-max`, default 12h, cap 72h) ends the session even if the lid never reopens.
+- Battery cutoff (`-min-battery`, default 20, `0` disables) ends the session when running on battery below that percent. `start` refuses if already below it.
 - State persisted to `/var/db/lidawake/state.json` on every transition.
 
 Crash / restart behaviour (daemon start):
@@ -48,6 +49,7 @@ sudo ./dist/lidawake install
 ```sh
 lidawake start            # 12h safety deadline
 lidawake start -max 3h
+lidawake start -min-battery 40   # end below 40% on battery; 0 disables
 lidawake status
 lidawake stop
 ```
@@ -64,7 +66,7 @@ sudo lidawake uninstall   # bootout, remove files, disablesleep 0
 
 - Daemon clears `disablesleep` on every start when no session is active. A manual `sudo pmset -a disablesleep 1` will be reset at next boot/daemon restart.
 - Lid is polled every 5 s. Closing and reopening within one poll goes unnoticed; the session then runs until `stop` or the deadline.
-- Closed lid traps heat. On battery, a session runs until battery dies or deadline.
+- Closed lid traps heat. On battery, a session ends below the `-min-battery` cutoff (if `pmset -g batt` can't be read, only the deadline applies).
 - `uninstall` removes `/usr/local/bin/lidawake` — run it from that path or from the build.
 - Installed binary is root-owned, but `/usr/local/bin` may be user-writable (e.g. Intel Homebrew). Moving the daemon binary to a root-only path is planned.
 

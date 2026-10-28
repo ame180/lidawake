@@ -1,7 +1,7 @@
 // Package session holds the one-shot "stay awake until lid reopens" state machine.
 //
 // Lifecycle: Start -> (lid closed: SeenClosed=true) -> lid opened -> End.
-// Deadline, Stop, or a reboot also end the session. Every transition is
+// Deadline, low battery, Stop, or a reboot also end the session. Every transition is
 // persisted before the matching pmset change, so a crash at any point
 // recovers to a consistent state on the next daemon start.
 package session
@@ -9,6 +9,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ type EndReason string
 const (
 	EndLidOpened   EndReason = "lid-opened"
 	EndDeadline    EndReason = "deadline"
+	EndLowBattery  EndReason = "low-battery"
 	EndStopped     EndReason = "stopped"
 	EndReboot      EndReason = "reboot"
 	EndStartFailed EndReason = "start-failed"
@@ -38,6 +40,11 @@ type SleepSetter interface {
 	SetSleepDisabled(ctx context.Context, disabled bool) error
 }
 
+// Battery reports the battery charge and whether the machine runs on it.
+type Battery interface {
+	Battery(ctx context.Context) (percent int, onBattery bool, err error)
+}
+
 // State is the persisted session state.
 type State struct {
 	Active      bool      `json:"active"`
@@ -45,6 +52,8 @@ type State struct {
 	StartedAt   time.Time `json:"startedAt,omitzero"`
 	Deadline    time.Time `json:"deadline,omitzero"`
 	BootSession string    `json:"bootSession,omitempty"`
+	// MinBattery ends the session when on battery below this percent; 0 disables.
+	MinBattery int `json:"minBattery,omitempty"`
 
 	LastEndReason EndReason `json:"lastEndReason,omitempty"`
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
@@ -60,6 +69,7 @@ type Manager struct {
 	store       Store
 	lid         Lid
 	sleep       SleepSetter
+	battery     Battery
 	now         func() time.Time
 	bootSession string
 	log         *slog.Logger
@@ -72,10 +82,11 @@ type Manager struct {
 
 // Config holds Manager dependencies. Now and Log are optional.
 type Config struct {
-	Store Store
-	Lid   Lid
-	Sleep SleepSetter
-	Now   func() time.Time
+	Store   Store
+	Lid     Lid
+	Sleep   SleepSetter
+	Battery Battery
+	Now     func() time.Time
 	// BootSession identifies the current boot; see power.BootSessionID.
 	BootSession string
 	Log         *slog.Logger
@@ -93,6 +104,7 @@ func NewManager(c Config) *Manager {
 		store:       c.Store,
 		lid:         c.Lid,
 		sleep:       c.Sleep,
+		battery:     c.Battery,
 		now:         c.Now,
 		bootSession: c.BootSession,
 		log:         c.Log,
@@ -130,8 +142,9 @@ func (m *Manager) Recover(ctx context.Context) error {
 	}
 }
 
-// Start begins a new session, replacing any active one.
-func (m *Manager) Start(ctx context.Context, maxDuration time.Duration) (State, error) {
+// Start begins a new session, replacing any active one. minBattery is the
+// cutoff percent on battery power; 0 disables it.
+func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBattery int) (State, error) {
 	if maxDuration <= 0 {
 		return State{}, errors.New("max duration must be positive")
 	}
@@ -141,6 +154,9 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration) (State, 
 	if _, err := m.lid.IsClosed(ctx); errors.Is(err, power.ErrNoClamshell) {
 		return m.state, err
 	}
+	if percent, low := m.batteryLow(ctx, minBattery); low {
+		return m.state, fmt.Errorf("battery at %d%%, below cutoff %d%% (plug in or lower -min-battery)", percent, minBattery)
+	}
 
 	now := m.now()
 	next := m.state
@@ -149,6 +165,7 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration) (State, 
 	next.StartedAt = now
 	next.Deadline = now.Add(maxDuration)
 	next.BootSession = m.bootSession
+	next.MinBattery = minBattery
 
 	if err := m.saveLocked(next); err != nil {
 		return m.state, err
@@ -160,7 +177,7 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration) (State, 
 		_ = m.endLocked(ctx, EndStartFailed)
 		return m.state, err
 	}
-	m.log.Info("session started", "deadline", next.Deadline)
+	m.log.Info("session started", "deadline", next.Deadline, "minBattery", minBattery)
 	return m.state, nil
 }
 
@@ -197,6 +214,10 @@ func (m *Manager) Tick(ctx context.Context) {
 		m.logEnd(m.endLocked(ctx, EndDeadline), EndDeadline)
 		return
 	}
+	if _, low := m.batteryLow(ctx, m.state.MinBattery); low {
+		m.logEnd(m.endLocked(ctx, EndLowBattery), EndLowBattery)
+		return
+	}
 
 	closed, err := m.lid.IsClosed(ctx)
 	if err != nil {
@@ -223,6 +244,21 @@ func (m *Manager) Status() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state
+}
+
+// batteryLow reports whether the machine is on battery below minBattery
+// percent. A read failure is logged and counts as not low; the deadline
+// still bounds the session.
+func (m *Manager) batteryLow(ctx context.Context, minBattery int) (percent int, low bool) {
+	if minBattery <= 0 {
+		return 0, false
+	}
+	percent, onBattery, err := m.battery.Battery(ctx)
+	if err != nil {
+		m.log.Warn("battery read failed", "err", err)
+		return 0, false
+	}
+	return percent, onBattery && percent < minBattery
 }
 
 // endLocked persists the end first, then re-enables sleep.

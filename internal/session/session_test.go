@@ -33,6 +33,16 @@ func (f *fakeSleep) SetSleepDisabled(_ context.Context, v bool) error {
 	return nil
 }
 
+type fakeBattery struct {
+	percent   int
+	onBattery bool
+	err       error
+}
+
+func (f *fakeBattery) Battery(context.Context) (int, bool, error) {
+	return f.percent, f.onBattery, f.err
+}
+
 // flakyStore wraps FileStore and can be told to fail Save.
 type flakyStore struct {
 	FileStore
@@ -52,20 +62,22 @@ func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 type harness struct {
-	m     *Manager
-	lid   *fakeLid
-	sleep *fakeSleep
-	clk   *clock
-	store *flakyStore
+	m       *Manager
+	lid     *fakeLid
+	sleep   *fakeSleep
+	battery *fakeBattery
+	clk     *clock
+	store   *flakyStore
 }
 
 func newHarness(t *testing.T, boot string) *harness {
 	t.Helper()
 	h := &harness{
-		lid:   &fakeLid{},
-		sleep: &fakeSleep{},
-		clk:   &clock{t: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)},
-		store: &flakyStore{FileStore: FileStore{Path: filepath.Join(t.TempDir(), "state.json")}},
+		lid:     &fakeLid{},
+		sleep:   &fakeSleep{},
+		battery: &fakeBattery{percent: 100},
+		clk:     &clock{t: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)},
+		store:   &flakyStore{FileStore: FileStore{Path: filepath.Join(t.TempDir(), "state.json")}},
 	}
 	h.m = h.newManager(boot)
 	return h
@@ -76,6 +88,7 @@ func (h *harness) newManager(boot string) *Manager {
 		Store:       h.store,
 		Lid:         h.lid,
 		Sleep:       h.sleep,
+		Battery:     h.battery,
 		Now:         h.clk.now,
 		BootSession: boot,
 		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -84,7 +97,7 @@ func (h *harness) newManager(boot string) *Manager {
 
 func (h *harness) start(t *testing.T, maxDuration time.Duration) {
 	t.Helper()
-	if _, err := h.m.Start(t.Context(), maxDuration); err != nil {
+	if _, err := h.m.Start(t.Context(), maxDuration, 20); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 }
@@ -172,7 +185,7 @@ func TestStartReplacesActiveSession(t *testing.T) {
 func TestStartRollsBackWhenPmsetFails(t *testing.T) {
 	h := newHarness(t, "boot-1")
 	h.sleep.failSet = true
-	if _, err := h.m.Start(t.Context(), time.Hour); err == nil {
+	if _, err := h.m.Start(t.Context(), time.Hour, 20); err == nil {
 		t.Fatal("expected pmset error")
 	}
 	st := h.m.Status()
@@ -184,7 +197,7 @@ func TestStartRollsBackWhenPmsetFails(t *testing.T) {
 func TestStartRejectsNonLaptop(t *testing.T) {
 	h := newHarness(t, "boot-1")
 	h.lid.err = power.ErrNoClamshell
-	if _, err := h.m.Start(t.Context(), time.Hour); !errors.Is(err, power.ErrNoClamshell) {
+	if _, err := h.m.Start(t.Context(), time.Hour, 20); !errors.Is(err, power.ErrNoClamshell) {
 		t.Fatalf("err = %v, want ErrNoClamshell", err)
 	}
 	if h.m.Status().Active || h.sleep.disabled {
@@ -314,5 +327,85 @@ func TestLidReadErrorKeepsSession(t *testing.T) {
 	h.m.Tick(t.Context())
 	if !h.m.Status().Active {
 		t.Fatal("transient lid error should not end session")
+	}
+}
+
+func TestLowBatteryEndsSession(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	h.start(t, 8*time.Hour)
+
+	h.battery.percent, h.battery.onBattery = 20, true
+	h.m.Tick(ctx)
+	if !h.m.Status().Active {
+		t.Fatal("at cutoff should keep going")
+	}
+
+	h.battery.percent = 19
+	h.m.Tick(ctx)
+	st := h.m.Status()
+	if st.Active || h.sleep.disabled {
+		t.Fatal("below cutoff on battery should end session")
+	}
+	if st.LastEndReason != EndLowBattery {
+		t.Fatalf("reason = %q, want %q", st.LastEndReason, EndLowBattery)
+	}
+}
+
+func TestLowBatteryIgnoredWhenNotOnBatteryOrDisabled(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	h.start(t, 8*time.Hour)
+	h.battery.percent = 5
+	h.m.Tick(ctx)
+	if !h.m.Status().Active {
+		t.Fatal("low charge on AC should not end session")
+	}
+
+	h.battery.onBattery = true
+	if _, err := h.m.Start(ctx, time.Hour, 0); err != nil {
+		t.Fatalf("start with cutoff off: %v", err)
+	}
+	h.m.Tick(ctx)
+	if !h.m.Status().Active {
+		t.Fatal("cutoff 0 should never end session")
+	}
+}
+
+func TestBatteryReadErrorKeepsSession(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	h.battery.err = errors.New("pmset failed")
+	h.start(t, 8*time.Hour)
+	h.m.Tick(ctx)
+	if !h.m.Status().Active || !h.sleep.disabled {
+		t.Fatal("battery read failure should keep session")
+	}
+}
+
+func TestStartRejectsLowBattery(t *testing.T) {
+	h := newHarness(t, "boot-1")
+	h.battery.percent, h.battery.onBattery = 15, true
+	if _, err := h.m.Start(t.Context(), time.Hour, 20); err == nil {
+		t.Fatal("expected low battery error")
+	}
+	if h.m.Status().Active || h.sleep.disabled {
+		t.Fatal("low battery start should not disable sleep")
+	}
+}
+
+func TestRecoverKeepsMinBattery(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	h.start(t, 8*time.Hour)
+
+	m2 := h.newManager("boot-1")
+	if err := m2.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.battery.percent, h.battery.onBattery = 10, true
+	m2.Tick(ctx)
+	if st := m2.Status(); st.Active || st.LastEndReason != EndLowBattery {
+		t.Fatalf("resumed session should keep battery cutoff: %+v", st)
 	}
 }
