@@ -1,7 +1,8 @@
 // Package session holds the one-shot "stay awake until lid reopens" state machine.
 //
 // Lifecycle: Start -> (lid closed: SeenClosed=true) -> lid opened -> End.
-// Deadline, low battery, Stop, or a reboot also end the session. Every transition is
+// Deadline, low battery, Stop, or a reboot also end the session. With
+// IgnoreLid, the lid is not watched and only those end it. Every transition is
 // persisted before the matching pmset change, so a crash at any point
 // recovers to a consistent state on the next daemon start.
 package session
@@ -54,6 +55,8 @@ type State struct {
 	BootSession string    `json:"bootSession,omitempty"`
 	// MinBattery ends the session when on battery below this percent; 0 disables.
 	MinBattery int `json:"minBattery,omitempty"`
+	// IgnoreLid keeps the session running through lid open/close.
+	IgnoreLid bool `json:"ignoreLid,omitempty"`
 
 	LastEndReason EndReason `json:"lastEndReason,omitempty"`
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
@@ -143,8 +146,9 @@ func (m *Manager) Recover(ctx context.Context) error {
 }
 
 // Start begins a new session, replacing any active one. minBattery is the
-// cutoff percent on battery power; 0 disables it.
-func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBattery int) (State, error) {
+// cutoff percent on battery power; 0 disables it. ignoreLid skips lid
+// tracking, so only the deadline, battery, or Stop end the session.
+func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBattery int, ignoreLid bool) (State, error) {
 	if maxDuration <= 0 {
 		return State{}, errors.New("max duration must be positive")
 	}
@@ -166,6 +170,7 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBatte
 	next.Deadline = now.Add(maxDuration)
 	next.BootSession = m.bootSession
 	next.MinBattery = minBattery
+	next.IgnoreLid = ignoreLid
 
 	if err := m.saveLocked(next); err != nil {
 		return m.state, err
@@ -177,7 +182,7 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBatte
 		_ = m.endLocked(ctx, EndStartFailed)
 		return m.state, err
 	}
-	m.log.Info("session started", "deadline", next.Deadline, "minBattery", minBattery)
+	m.log.Info("session started", "deadline", next.Deadline, "minBattery", minBattery, "ignoreLid", ignoreLid)
 	return m.state, nil
 }
 
@@ -216,6 +221,9 @@ func (m *Manager) Tick(ctx context.Context) {
 	}
 	if _, low := m.batteryLow(ctx, m.state.MinBattery); low {
 		m.logEnd(m.endLocked(ctx, EndLowBattery), EndLowBattery)
+		return
+	}
+	if m.state.IgnoreLid {
 		return
 	}
 

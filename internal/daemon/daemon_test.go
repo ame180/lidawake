@@ -102,6 +102,14 @@ func TestSocketRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIgnoreLidRoundTrip(t *testing.T) {
+	td := startDaemon(t)
+	resp, err := rpc.Call(t.Context(), td.sock, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: 60, IgnoreLid: true})
+	if err != nil || !resp.OK || !resp.Status.IgnoreLid {
+		t.Fatalf("start: %+v %v", resp, err)
+	}
+}
+
 func TestRejectedRequests(t *testing.T) {
 	td := startDaemon(t)
 	cases := []struct {
