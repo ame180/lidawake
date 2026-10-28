@@ -29,9 +29,10 @@ var version = "dev"
 const usage = `lidawake - stay awake with lid closed, until lid reopens
 
 Usage:
-  lidawake start [-max 12h] [-min-battery 20]
+  lidawake start [-max 12h] [-min-battery 20] [-ignore-lid]
                                   disable sleep until lid closes and reopens
-                                  (or max elapses, or battery drops below min)
+                                  (or max elapses, or battery drops below min;
+                                  -ignore-lid: only max, battery, or stop)
   lidawake stop                   end session now, re-enable sleep
   lidawake status [-json]         show session and pmset state
   sudo lidawake install [-uid N]  install binary + launchd daemon
@@ -75,22 +76,27 @@ func main() {
 }
 
 func runStart(args []string) error {
-	fs := newFlagSet("start [-max 12h] [-min-battery 20]")
+	fs := newFlagSet("start [-max 12h] [-min-battery 20] [-ignore-lid]")
 	maxDuration := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
 	minBattery := fs.Int("min-battery", 20, "end session when on battery below this percent; 0 disables")
+	ignoreLid := fs.Bool("ignore-lid", false, "keep running when the lid reopens; only max, battery, or stop end the session")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds()), MinBattery: *minBattery})
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds()), MinBattery: *minBattery, IgnoreLid: *ignoreLid})
 	if err != nil {
 		return err
 	}
 	if !resp.OK {
 		return errors.New(resp.Error)
 	}
-	fmt.Printf("Sleep disabled. Close the lid; reopening it re-enables sleep.\nDeadline: %s (%s)\n",
-		resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
+	if resp.Status.IgnoreLid {
+		fmt.Println("Sleep disabled. Lid ignored; runs until the deadline, battery cutoff, or stop.")
+	} else {
+		fmt.Println("Sleep disabled. Close the lid; reopening it re-enables sleep.")
+	}
+	fmt.Printf("Deadline: %s (%s)\n", resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
 	fmt.Printf("Battery cutoff: %s\n", batteryCutoff(resp.Status.MinBattery))
 	return nil
 }
@@ -136,7 +142,10 @@ func runStatus(args []string) error {
 func printStatus(s rpc.Status) {
 	if s.Active {
 		phase := "waiting for lid to close"
-		if s.SeenClosed {
+		switch {
+		case s.IgnoreLid:
+			phase = "lid ignored"
+		case s.SeenClosed:
 			phase = "lid closed, waiting for reopen"
 		}
 		fmt.Printf("Session:   active (%s)\n", phase)

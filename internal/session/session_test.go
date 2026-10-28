@@ -97,7 +97,7 @@ func (h *harness) newManager(boot string) *Manager {
 
 func (h *harness) start(t *testing.T, maxDuration time.Duration) {
 	t.Helper()
-	if _, err := h.m.Start(t.Context(), maxDuration, 20); err != nil {
+	if _, err := h.m.Start(t.Context(), maxDuration, 20, false); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 }
@@ -185,7 +185,7 @@ func TestStartReplacesActiveSession(t *testing.T) {
 func TestStartRollsBackWhenPmsetFails(t *testing.T) {
 	h := newHarness(t, "boot-1")
 	h.sleep.failSet = true
-	if _, err := h.m.Start(t.Context(), time.Hour, 20); err == nil {
+	if _, err := h.m.Start(t.Context(), time.Hour, 20, false); err == nil {
 		t.Fatal("expected pmset error")
 	}
 	st := h.m.Status()
@@ -197,7 +197,7 @@ func TestStartRollsBackWhenPmsetFails(t *testing.T) {
 func TestStartRejectsNonLaptop(t *testing.T) {
 	h := newHarness(t, "boot-1")
 	h.lid.err = power.ErrNoClamshell
-	if _, err := h.m.Start(t.Context(), time.Hour, 20); !errors.Is(err, power.ErrNoClamshell) {
+	if _, err := h.m.Start(t.Context(), time.Hour, 20, false); !errors.Is(err, power.ErrNoClamshell) {
 		t.Fatalf("err = %v, want ErrNoClamshell", err)
 	}
 	if h.m.Status().Active || h.sleep.disabled {
@@ -363,7 +363,7 @@ func TestLowBatteryIgnoredWhenNotOnBatteryOrDisabled(t *testing.T) {
 	}
 
 	h.battery.onBattery = true
-	if _, err := h.m.Start(ctx, time.Hour, 0); err != nil {
+	if _, err := h.m.Start(ctx, time.Hour, 0, false); err != nil {
 		t.Fatalf("start with cutoff off: %v", err)
 	}
 	h.m.Tick(ctx)
@@ -386,7 +386,7 @@ func TestBatteryReadErrorKeepsSession(t *testing.T) {
 func TestStartRejectsLowBattery(t *testing.T) {
 	h := newHarness(t, "boot-1")
 	h.battery.percent, h.battery.onBattery = 15, true
-	if _, err := h.m.Start(t.Context(), time.Hour, 20); err == nil {
+	if _, err := h.m.Start(t.Context(), time.Hour, 20, false); err == nil {
 		t.Fatal("expected low battery error")
 	}
 	if h.m.Status().Active || h.sleep.disabled {
@@ -407,5 +407,46 @@ func TestRecoverKeepsMinBattery(t *testing.T) {
 	m2.Tick(ctx)
 	if st := m2.Status(); st.Active || st.LastEndReason != EndLowBattery {
 		t.Fatalf("resumed session should keep battery cutoff: %+v", st)
+	}
+}
+
+func TestIgnoreLidRunsUntilDeadline(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	if _, err := h.m.Start(ctx, time.Hour, 20, true); err != nil {
+		t.Fatal(err)
+	}
+	h.lid.closed = true
+	h.m.Tick(ctx)
+	h.lid.closed = false
+	h.m.Tick(ctx)
+	if !h.m.Status().Active || !h.sleep.disabled {
+		t.Fatal("lid reopen should not end an ignore-lid session")
+	}
+
+	h.clk.advance(time.Hour)
+	h.m.Tick(ctx)
+	if st := h.m.Status(); st.Active || h.sleep.disabled || st.LastEndReason != EndDeadline {
+		t.Fatalf("deadline should end ignore-lid session: %+v", st)
+	}
+}
+
+func TestRecoverKeepsIgnoreLid(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	if _, err := h.m.Start(ctx, 8*time.Hour, 20, true); err != nil {
+		t.Fatal(err)
+	}
+
+	m2 := h.newManager("boot-1")
+	if err := m2.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.lid.closed = true
+	m2.Tick(ctx)
+	h.lid.closed = false
+	m2.Tick(ctx)
+	if st := m2.Status(); !st.Active || !st.IgnoreLid {
+		t.Fatalf("resumed session should keep ignoring the lid: %+v", st)
 	}
 }

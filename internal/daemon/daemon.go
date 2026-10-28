@@ -163,7 +163,7 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 			err = errors.New("min battery must be between 0 and 99")
 			break
 		}
-		_, err = d.mgr.Start(ctx, time.Duration(req.MaxSeconds)*time.Second, req.MinBattery)
+		_, err = d.mgr.Start(ctx, time.Duration(req.MaxSeconds)*time.Second, req.MinBattery, req.IgnoreLid)
 	case rpc.CmdStop:
 		_, err = d.mgr.Stop(ctx)
 	case rpc.CmdStatus:
@@ -190,6 +190,7 @@ func (d *Daemon) status(ctx context.Context) rpc.Status {
 		StartedAt:     st.StartedAt,
 		Deadline:      st.Deadline,
 		MinBattery:    st.MinBattery,
+		IgnoreLid:     st.IgnoreLid,
 		SleepDisabled: disabled,
 		LastEndReason: string(st.LastEndReason),
 		LastEndedAt:   st.LastEndedAt,
