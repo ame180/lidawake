@@ -94,13 +94,7 @@ func runStart(args []string) error {
 	if !resp.OK {
 		return errors.New(resp.Error)
 	}
-	if resp.Status.IgnoreLid {
-		fmt.Println("Sleep disabled. Lid ignored; runs until the deadline, battery cutoff, or stop.")
-	} else {
-		fmt.Println("Sleep disabled. Close the lid; reopening it re-enables sleep.")
-	}
-	fmt.Printf("Deadline: %s (%s)\n", resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
-	fmt.Printf("Battery cutoff: %s\n", batteryCutoff(resp.Status.MinBattery))
+	printSessionSummary("Sleep disabled.", "Close the lid; reopening it re-enables sleep.", resp.Status, maxDuration.String())
 	return nil
 }
 
@@ -116,16 +110,29 @@ func runExtend(args []string) error {
 		return fmt.Errorf("extend: %w", err)
 	}
 
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: int64(by.Seconds())})
+	secs := int64(by.Seconds())
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: secs})
 	if err != nil {
 		return err
 	}
 	if !resp.OK {
 		return errors.New(resp.Error)
 	}
-	fmt.Printf("Deadline: %s (in %s)\n", resp.Status.Deadline.Local().Format("Mon 15:04"),
-		time.Until(resp.Status.Deadline).Round(time.Minute))
+	printSessionSummary("Extended by "+(time.Duration(secs)*time.Second).String()+".", "Reopening the lid re-enables sleep.", resp.Status,
+		"in "+time.Until(resp.Status.Deadline).Round(time.Minute).String())
 	return nil
+}
+
+// printSessionSummary reminds the user what session start or extend left
+// running.
+func printSessionSummary(headline, watchedLidHint string, s rpc.Status, deadlineNote string) {
+	lidHint := watchedLidHint
+	if s.IgnoreLid {
+		lidHint = "Lid ignored; runs until the deadline, battery cutoff, or stop."
+	}
+	fmt.Println(headline + " " + lidHint)
+	fmt.Printf("Deadline: %s (%s)\n", s.Deadline.Local().Format("Mon 15:04"), deadlineNote)
+	fmt.Printf("Battery cutoff: %s\n", batteryCutoff(s.MinBattery))
 }
 
 func runStop(args []string) error {
