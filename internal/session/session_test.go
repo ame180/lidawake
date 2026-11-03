@@ -450,3 +450,54 @@ func TestRecoverKeepsIgnoreLid(t *testing.T) {
 		t.Fatalf("resumed session should keep ignoring the lid: %+v", st)
 	}
 }
+
+func TestExtendKeepsSettings(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness(t, "boot-1")
+	if _, err := h.m.Start(ctx, 2*time.Hour, 40, true); err != nil {
+		t.Fatal(err)
+	}
+	before := h.m.Status()
+
+	h.clk.advance(time.Hour)
+	st, err := h.m.Extend(3*time.Hour, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("extend: %v", err)
+	}
+	if want := before.Deadline.Add(3 * time.Hour); !st.Deadline.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", st.Deadline, want)
+	}
+	st.Deadline = before.Deadline
+	if st != before {
+		t.Fatalf("extend changed more than the deadline:\n got %+v\nwant %+v", st, before)
+	}
+
+	// Persisted, so a restart resumes with the new deadline.
+	h.m = h.newManager("boot-1")
+	if err := h.m.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.m.Status().Deadline; !got.Equal(before.Deadline.Add(3 * time.Hour)) {
+		t.Fatalf("recovered deadline = %v", got)
+	}
+}
+
+func TestExtendRejected(t *testing.T) {
+	h := newHarness(t, "boot-1")
+	if _, err := h.m.Extend(time.Hour, 72*time.Hour); !errors.Is(err, ErrNotActive) {
+		t.Fatalf("extend without session: err = %v, want ErrNotActive", err)
+	}
+
+	h.start(t, 70*time.Hour)
+	before := h.m.Status()
+	if _, err := h.m.Extend(3*time.Hour, 72*time.Hour); err == nil {
+		t.Fatal("extend past cap should fail")
+	}
+	h.store.failSave = true
+	if _, err := h.m.Extend(time.Hour, 72*time.Hour); err == nil {
+		t.Fatal("extend should fail when save fails")
+	}
+	if got := h.m.Status(); got != before {
+		t.Fatalf("rejected extend changed state: %+v", got)
+	}
+}

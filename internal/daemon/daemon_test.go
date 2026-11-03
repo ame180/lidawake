@@ -110,6 +110,26 @@ func TestIgnoreLidRoundTrip(t *testing.T) {
 	}
 }
 
+func TestExtendRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	td := startDaemon(t)
+	resp, err := rpc.Call(ctx, td.sock, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: 60})
+	if err != nil || !resp.OK {
+		t.Fatalf("start: %+v %v", resp, err)
+	}
+	deadline := resp.Status.Deadline
+
+	resp, err = rpc.Call(ctx, td.sock, rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: 120})
+	if err != nil || !resp.OK || !resp.Status.Deadline.Equal(deadline.Add(2*time.Minute)) {
+		t.Fatalf("extend: %+v %v", resp, err)
+	}
+
+	resp, err = rpc.Call(ctx, td.sock, rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: 3600})
+	if err != nil || resp.OK {
+		t.Fatalf("extend past MaxAllowed should fail: %+v %v", resp, err)
+	}
+}
+
 func TestRejectedRequests(t *testing.T) {
 	td := startDaemon(t)
 	cases := []struct {
@@ -121,6 +141,8 @@ func TestRejectedRequests(t *testing.T) {
 		{"overflowing max", `{"cmd":"start","maxSeconds":9223372036854775807}` + "\n"},
 		{"negative min battery", `{"cmd":"start","maxSeconds":60,"minBattery":-1}` + "\n"},
 		{"min battery 100", `{"cmd":"start","maxSeconds":60,"minBattery":100}` + "\n"},
+		{"extend without session", `{"cmd":"extend","maxSeconds":60}` + "\n"},
+		{"overflowing extend", `{"cmd":"extend","maxSeconds":9223372036854775807}` + "\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
