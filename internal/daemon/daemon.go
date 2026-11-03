@@ -166,6 +166,12 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 		_, err = d.mgr.Start(ctx, time.Duration(req.MaxSeconds)*time.Second, req.MinBattery, req.IgnoreLid)
 	case rpc.CmdStop:
 		_, err = d.mgr.Stop(ctx)
+	case rpc.CmdExtend:
+		if req.MaxSeconds <= 0 || req.MaxSeconds > int64(d.cfg.MaxAllowed/time.Second) {
+			err = fmt.Errorf("extension must be between 1s and %s", d.cfg.MaxAllowed)
+			break
+		}
+		_, err = d.mgr.Extend(time.Duration(req.MaxSeconds)*time.Second, d.cfg.MaxAllowed)
 	case rpc.CmdStatus:
 	default:
 		err = fmt.Errorf("unknown command %q", req.Cmd)

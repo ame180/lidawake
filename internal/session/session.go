@@ -62,7 +62,7 @@ type State struct {
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
 }
 
-// ErrNotActive is returned by Stop when no session is running.
+// ErrNotActive is returned by Stop and Extend when no session is running.
 var ErrNotActive = errors.New("no active session")
 
 // Manager runs the session state machine. It is safe for concurrent use.
@@ -195,6 +195,31 @@ func (m *Manager) Stop(ctx context.Context) (State, error) {
 	}
 	err := m.endLocked(ctx, EndStopped)
 	return m.state, err
+}
+
+// Extend pushes the active session's deadline out by d, keeping every other
+// setting. It fails if the new deadline would be more than limit from now.
+func (m *Manager) Extend(d, limit time.Duration) (State, error) {
+	if d <= 0 {
+		return State{}, errors.New("extension must be positive")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.state.Active {
+		return m.state, ErrNotActive
+	}
+
+	next := m.state
+	next.Deadline = next.Deadline.Add(d)
+	if next.Deadline.Sub(m.now()) > limit {
+		return m.state, fmt.Errorf("new deadline would be more than %s from now", limit)
+	}
+	if err := m.saveLocked(next); err != nil {
+		return m.state, err
+	}
+	m.state = next
+	m.log.Info("session extended", "deadline", next.Deadline)
+	return m.state, nil
 }
 
 // Tick runs one poll step. Call periodically.

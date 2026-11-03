@@ -5,9 +5,10 @@ Keep a MacBook awake with the lid closed — once. Reopening the lid re-enables 
 ## How it works
 
 - Root launchd daemon (`dev.lidawake.daemon`) owns all `pmset` calls.
-- CLI talks to it over `/var/run/lidawake.sock` (mode 0600, owned by the installing user, so no `sudo` needed for start/stop/status).
+- CLI talks to it over `/var/run/lidawake.sock` (mode 0600, owned by the installing user, so no `sudo` needed for start/extend/stop/status).
 - Session: `start` → `pmset -a disablesleep 1` → poll `AppleClamshellState` every 5 s → lid closed (recorded) → lid opened → `pmset -a disablesleep 0`.
 - Safety deadline (`-max`, default 12h, cap 72h) ends the session even if the lid never reopens.
+- `extend` adds time to the active session's deadline (still capped at 72h from now) and keeps every other setting; running `start` again would reset them to defaults.
 - Time-only mode (`-ignore-lid`) skips lid tracking: the session runs until the deadline, battery cutoff, or `stop`.
 - Battery cutoff (`-min-battery`, default 20, `0` disables) ends the session when running on battery below that percent. `start` refuses if already below it.
 - State persisted to `/var/db/lidawake/state.json` on every transition.
@@ -52,6 +53,7 @@ lidawake start            # 12h safety deadline
 lidawake start -max 3h
 lidawake start -min-battery 40   # end below 40% on battery; 0 disables
 lidawake start -ignore-lid -max 2h   # stay awake 2h, lid open or closed
+lidawake extend 2h        # push the deadline out 2h, keep other settings
 lidawake status
 lidawake stop
 ```

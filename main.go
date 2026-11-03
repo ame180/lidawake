@@ -33,6 +33,7 @@ Usage:
                                   disable sleep until lid closes and reopens
                                   (or max elapses, or battery drops below min;
                                   -ignore-lid: only max, battery, or stop)
+  lidawake extend <duration>      push the deadline out, keeping other settings
   lidawake stop                   end session now, re-enable sleep
   lidawake status [-json]         show session and pmset state
   sudo lidawake install [-uid N]  install binary + launchd daemon
@@ -51,6 +52,8 @@ func main() {
 	switch cmd {
 	case "start":
 		err = runStart(args)
+	case "extend":
+		err = runExtend(args)
 	case "stop":
 		err = runStop(args)
 	case "status":
@@ -98,6 +101,30 @@ func runStart(args []string) error {
 	}
 	fmt.Printf("Deadline: %s (%s)\n", resp.Status.Deadline.Local().Format("Mon 15:04"), *maxDuration)
 	fmt.Printf("Battery cutoff: %s\n", batteryCutoff(resp.Status.MinBattery))
+	return nil
+}
+
+func runExtend(args []string) error {
+	fs := newFlagSet("extend <duration>")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return errors.New("extend: want exactly one duration, e.g. 2h")
+	}
+	by, err := time.ParseDuration(fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("extend: %w", err)
+	}
+
+	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: int64(by.Seconds())})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
+	}
+	fmt.Printf("Deadline: %s (in %s)\n", resp.Status.Deadline.Local().Format("Mon 15:04"),
+		time.Until(resp.Status.Deadline).Round(time.Minute))
 	return nil
 }
 

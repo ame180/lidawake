@@ -20,10 +20,12 @@ const (
 	CmdStart  Command = "start"
 	CmdStop   Command = "stop"
 	CmdStatus Command = "status"
+	CmdExtend Command = "extend"
 )
 
-// Request is sent by the CLI. MaxSeconds, MinBattery, and IgnoreLid apply to
-// CmdStart only. MinBattery 0 disables the battery cutoff.
+// Request is sent by the CLI. MaxSeconds is the session length for CmdStart
+// and the time to add for CmdExtend. MinBattery and IgnoreLid apply to
+// CmdStart only; MinBattery 0 disables the battery cutoff.
 type Request struct {
 	Cmd        Command `json:"cmd"`
 	MaxSeconds int64   `json:"maxSeconds,omitempty"`
