@@ -62,7 +62,7 @@ type State struct {
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
 }
 
-// ErrNotActive is returned by Stop when no session is running.
+// ErrNotActive is returned by Stop and Extend when no session is running.
 var ErrNotActive = errors.New("no active session")
 
 // Manager runs the session state machine. It is safe for concurrent use.
