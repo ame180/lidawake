@@ -43,7 +43,6 @@ Usage:
   lidawake version                show version (also -v, --version)
 `
 
-// Session defaults shared by start and bare lidawake.
 const (
 	defaultMax        = 12 * time.Hour
 	defaultMinBattery = 20
@@ -150,8 +149,6 @@ func parseStartArgs(args []string) (startOptions, error) {
 	return opts, nil
 }
 
-// startSession asks the daemon for a new session and prints its summary.
-// replacing notes that it took over an active session.
 func startSession(opts startOptions, replacing bool) error {
 	s, err := call(rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(opts.maxDuration.Seconds()), MinBattery: opts.minBattery, IgnoreLid: opts.ignoreLid})
 	if err != nil {
@@ -240,7 +237,8 @@ func runStatus(args []string) error {
 	return nil
 }
 
-// call sends one request to the daemon; a refused request becomes an error.
+// call sends one request to the daemon. A refused request returns an error
+// along with the daemon's status, which callers use to explain the refusal.
 func call(req rpc.Request) (rpc.Status, error) {
 	resp, err := rpc.Call(context.Background(), install.SocketPath, req)
 	if err != nil {
@@ -292,7 +290,6 @@ func formatDuration(d time.Duration) string {
 	return s
 }
 
-// printBattery prints the charge and power source, if a battery was read.
 func printBattery(s rpc.Status) {
 	if s.BatteryPercent <= 0 {
 		return
@@ -398,7 +395,6 @@ func newFlagSet(synopsis string) *flag.FlagSet {
 	return fs
 }
 
-// flagGiven reports whether the named flag was set on the command line.
 func flagGiven(fs *flag.FlagSet, name string) bool {
 	given := false
 	fs.Visit(func(f *flag.Flag) { given = given || f.Name == name })

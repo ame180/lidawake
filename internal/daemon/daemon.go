@@ -192,7 +192,8 @@ func (d *Daemon) status(ctx context.Context) rpc.Status {
 	if err != nil {
 		d.log.Warn("read pmset", "err", err)
 	}
-	// No battery (or an unreadable one) leaves the percent at 0; status omits it.
+	// Battery errors are dropped, not logged: a Mac without a battery would
+	// warn on every status call.
 	percent, onBattery, _ := d.probe.Battery(ctx)
 	return rpc.Status{
 		Active:         st.Active,
