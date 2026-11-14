@@ -82,7 +82,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		fmt.Fprintln(os.Stderr, "Error: "+capitalize(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -133,18 +133,18 @@ func parseStartArgs(args []string) (startOptions, error) {
 		return opts, nil
 	}
 	if flagGiven(fs, "max") {
-		return opts, errors.New("start: give the duration once, as -max or as an argument")
+		return opts, errors.New("give the duration once, as -max or as an argument")
 	}
-	d, err := time.ParseDuration(fs.Arg(0))
+	d, err := parseDuration(fs.Arg(0))
 	if err != nil {
-		return opts, fmt.Errorf("start: %w", err)
+		return opts, err
 	}
 	opts.maxDuration = d
 	if fs.NArg() > 1 {
 		if strings.HasPrefix(fs.Arg(1), "-") {
-			return opts, fmt.Errorf("start: flags go before the duration, got %q after it", fs.Arg(1))
+			return opts, fmt.Errorf("flags go before the duration, got %q after it", fs.Arg(1))
 		}
-		return opts, fmt.Errorf("start: unexpected argument %q", fs.Arg(1))
+		return opts, fmt.Errorf("unexpected argument %q", fs.Arg(1))
 	}
 	return opts, nil
 }
@@ -166,11 +166,11 @@ func runExtend(args []string) error {
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return errors.New("extend: want exactly one duration, e.g. 2h")
+		return errors.New("give exactly one duration, e.g. 2h")
 	}
-	by, err := time.ParseDuration(fs.Arg(0))
+	by, err := parseDuration(fs.Arg(0))
 	if err != nil {
-		return fmt.Errorf("extend: %w", err)
+		return err
 	}
 
 	secs := int64(by.Seconds())
@@ -283,6 +283,25 @@ func printStatus(s rpc.Status) {
 	if !s.Active && s.SleepDisabled {
 		fmt.Println("WARNING: sleep disabled outside a session. Fix: lidawake stop")
 	}
+}
+
+// parseDuration wraps time.ParseDuration without its "time: " prefix, which
+// means nothing to someone typing a command.
+func parseDuration(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, errors.New(strings.TrimPrefix(err.Error(), "time: "))
+	}
+	return d, nil
+}
+
+// capitalize is applied only when printing: Go error strings stay lowercase
+// because they get wrapped into longer messages.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // formatDuration prints d without trailing zero units: 12h, 1h30m, 45s.
@@ -412,7 +431,7 @@ func flagGiven(fs *flag.FlagSet, name string) bool {
 func parseFlags(fs *flag.FlagSet, args []string) error {
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
-		return fmt.Errorf("%s: unexpected argument %q", fs.Name(), fs.Arg(0))
+		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
 	return nil
 }
