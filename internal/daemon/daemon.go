@@ -30,22 +30,24 @@ type Config struct {
 	MaxAllowed   time.Duration
 }
 
-// SleepReader reports the live system-wide "disablesleep" flag.
-type SleepReader interface {
+// Probe reads the live system state reported by status: the system-wide
+// "disablesleep" flag and the battery.
+type Probe interface {
 	SleepDisabled(ctx context.Context) (bool, error)
+	session.Battery
 }
 
 // Daemon serves the control socket and drives the session poll loop.
 type Daemon struct {
 	cfg   Config
 	mgr   *session.Manager
-	sleep SleepReader
+	probe Probe
 	log   *slog.Logger
 }
 
 // New returns a Daemon; call Run to start it.
-func New(cfg Config, mgr *session.Manager, sleep SleepReader, logger *slog.Logger) *Daemon {
-	return &Daemon{cfg: cfg, mgr: mgr, sleep: sleep, log: logger}
+func New(cfg Config, mgr *session.Manager, probe Probe, logger *slog.Logger) *Daemon {
+	return &Daemon{cfg: cfg, mgr: mgr, probe: probe, log: logger}
 }
 
 // Run recovers persisted state, then serves until ctx is cancelled and all
@@ -186,20 +188,24 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 
 func (d *Daemon) status(ctx context.Context) rpc.Status {
 	st := d.mgr.Status()
-	disabled, err := d.sleep.SleepDisabled(ctx)
+	disabled, err := d.probe.SleepDisabled(ctx)
 	if err != nil {
 		d.log.Warn("read pmset", "err", err)
 	}
+	// No battery (or an unreadable one) leaves the percent at 0, shown as unknown.
+	percent, onBattery, _ := d.probe.Battery(ctx)
 	return rpc.Status{
-		Active:        st.Active,
-		SeenClosed:    st.SeenClosed,
-		StartedAt:     st.StartedAt,
-		Deadline:      st.Deadline,
-		MinBattery:    st.MinBattery,
-		IgnoreLid:     st.IgnoreLid,
-		SleepDisabled: disabled,
-		LastEndReason: string(st.LastEndReason),
-		LastEndedAt:   st.LastEndedAt,
+		Active:         st.Active,
+		SeenClosed:     st.SeenClosed,
+		StartedAt:      st.StartedAt,
+		Deadline:       st.Deadline,
+		MinBattery:     st.MinBattery,
+		IgnoreLid:      st.IgnoreLid,
+		SleepDisabled:  disabled,
+		BatteryPercent: percent,
+		OnBattery:      onBattery,
+		LastEndReason:  string(st.LastEndReason),
+		LastEndedAt:    st.LastEndedAt,
 	}
 }
 

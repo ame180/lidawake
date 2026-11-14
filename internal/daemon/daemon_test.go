@@ -33,6 +33,11 @@ type fakeBattery struct{}
 
 func (fakeBattery) Battery(context.Context) (int, bool, error) { return 100, false, nil }
 
+type fakeProbe struct {
+	*fakeSleep
+	fakeBattery
+}
+
 type testDaemon struct {
 	sock string
 	lid  *fakeLid
@@ -51,7 +56,7 @@ func startDaemon(t *testing.T) *testDaemon {
 		Store: session.FileStore{Path: filepath.Join(dir, "state.json")},
 		Lid:   td.lid, Sleep: sleep, Battery: fakeBattery{}, Log: logger,
 	})
-	d := New(Config{SocketPath: td.sock, AllowUID: -1, PollInterval: 10 * time.Millisecond, MaxAllowed: time.Hour}, td.mgr, sleep, logger)
+	d := New(Config{SocketPath: td.sock, AllowUID: -1, PollInterval: 10 * time.Millisecond, MaxAllowed: time.Hour}, td.mgr, fakeProbe{sleep, fakeBattery{}}, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -84,7 +89,7 @@ func TestSocketRoundTrip(t *testing.T) {
 	}
 
 	resp, err = rpc.Call(ctx, td.sock, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: 60, MinBattery: 20})
-	if err != nil || !resp.OK || !resp.Status.Active || !resp.Status.SleepDisabled || resp.Status.MinBattery != 20 {
+	if err != nil || !resp.OK || !resp.Status.Active || !resp.Status.SleepDisabled || resp.Status.MinBattery != 20 || resp.Status.BatteryPercent != 100 {
 		t.Fatalf("start: %+v %v", resp, err)
 	}
 

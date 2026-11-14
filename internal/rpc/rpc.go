@@ -33,17 +33,20 @@ type Request struct {
 	IgnoreLid  bool    `json:"ignoreLid,omitempty"`
 }
 
-// Status describes the session and the live pmset flag.
+// Status describes the session, the live pmset flag, and the battery.
+// BatteryPercent is 0 when no battery could be read.
 type Status struct {
-	Active        bool      `json:"active"`
-	SeenClosed    bool      `json:"seenClosed"`
-	StartedAt     time.Time `json:"startedAt,omitzero"`
-	Deadline      time.Time `json:"deadline,omitzero"`
-	MinBattery    int       `json:"minBattery"`
-	IgnoreLid     bool      `json:"ignoreLid"`
-	SleepDisabled bool      `json:"sleepDisabled"`
-	LastEndReason string    `json:"lastEndReason,omitempty"`
-	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
+	Active         bool      `json:"active"`
+	SeenClosed     bool      `json:"seenClosed"`
+	StartedAt      time.Time `json:"startedAt,omitzero"`
+	Deadline       time.Time `json:"deadline,omitzero"`
+	MinBattery     int       `json:"minBattery"`
+	IgnoreLid      bool      `json:"ignoreLid"`
+	SleepDisabled  bool      `json:"sleepDisabled"`
+	BatteryPercent int       `json:"batteryPercent,omitempty"`
+	OnBattery      bool      `json:"onBattery"`
+	LastEndReason  string    `json:"lastEndReason,omitempty"`
+	LastEndedAt    time.Time `json:"lastEndedAt,omitzero"`
 }
 
 // Response is sent by the daemon. Status is filled even when OK is false.
