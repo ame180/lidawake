@@ -213,7 +213,7 @@ func (m *Manager) Extend(d, limit time.Duration) (State, error) {
 	next := m.state
 	next.Deadline = next.Deadline.Add(d)
 	if next.Deadline.Sub(m.now()) > limit {
-		return m.state, fmt.Errorf("new deadline would be more than %s from now", limit)
+		return m.state, fmt.Errorf("new deadline would be more than %gh from now", limit.Hours())
 	}
 	if err := m.saveLocked(next); err != nil {
 		return m.state, err

@@ -44,7 +44,7 @@ type Status struct {
 	IgnoreLid      bool      `json:"ignoreLid"`
 	SleepDisabled  bool      `json:"sleepDisabled"`
 	BatteryPercent int       `json:"batteryPercent,omitempty"`
-	OnBattery      bool      `json:"onBattery"`
+	OnBattery      bool      `json:"onBattery,omitempty"`
 	LastEndReason  string    `json:"lastEndReason,omitempty"`
 	LastEndedAt    time.Time `json:"lastEndedAt,omitzero"`
 }

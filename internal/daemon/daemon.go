@@ -158,7 +158,7 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 	case rpc.CmdStart:
 		// Compare in seconds: multiplying first could overflow into range.
 		if req.MaxSeconds <= 0 || req.MaxSeconds > int64(d.cfg.MaxAllowed/time.Second) {
-			err = fmt.Errorf("max duration must be between 1s and %s", d.cfg.MaxAllowed)
+			err = fmt.Errorf("max duration must be between 1s and %gh", d.cfg.MaxAllowed.Hours())
 			break
 		}
 		if req.MinBattery < 0 || req.MinBattery > 99 {
@@ -170,7 +170,7 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 		_, err = d.mgr.Stop(ctx)
 	case rpc.CmdExtend:
 		if req.MaxSeconds <= 0 || req.MaxSeconds > int64(d.cfg.MaxAllowed/time.Second) {
-			err = fmt.Errorf("extension must be between 1s and %s", d.cfg.MaxAllowed)
+			err = fmt.Errorf("extension must be between 1s and %gh", d.cfg.MaxAllowed.Hours())
 			break
 		}
 		_, err = d.mgr.Extend(time.Duration(req.MaxSeconds)*time.Second, d.cfg.MaxAllowed)
@@ -192,7 +192,7 @@ func (d *Daemon) status(ctx context.Context) rpc.Status {
 	if err != nil {
 		d.log.Warn("read pmset", "err", err)
 	}
-	// No battery (or an unreadable one) leaves the percent at 0, shown as unknown.
+	// No battery (or an unreadable one) leaves the percent at 0; status omits it.
 	percent, onBattery, _ := d.probe.Battery(ctx)
 	return rpc.Status{
 		Active:         st.Active,
