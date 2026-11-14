@@ -175,6 +175,13 @@ func runExtend(args []string) error {
 
 	secs := int64(by.Seconds())
 	s, err := call(rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: secs})
+	if err != nil && err.Error() == session.ErrNotActive.Error() {
+		// Sessions end on their own; say how, or the refusal looks like a bug.
+		if s.LastEndReason == "" {
+			return errors.New("no active session to extend")
+		}
+		return fmt.Errorf("no active session to extend (last ended: %s at %s)", s.LastEndReason, s.LastEndedAt.Local().Format("Mon 15:04"))
+	}
 	if err != nil {
 		return err
 	}
