@@ -62,7 +62,7 @@ type State struct {
 	LastEndedAt   time.Time `json:"lastEndedAt,omitzero"`
 }
 
-// ErrNotActive is returned by Stop and Extend when no session is running.
+// ErrNotActive is returned by Extend when no session is running.
 var ErrNotActive = errors.New("no active session")
 
 // Manager runs the session state machine. It is safe for concurrent use.
@@ -186,12 +186,13 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBatte
 	return m.state, nil
 }
 
-// Stop ends the active session.
+// Stop ends the active session. With no session it still re-enables sleep,
+// clearing a stray disablesleep flag (set by hand, or a clear still pending retry).
 func (m *Manager) Stop(ctx context.Context) (State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.state.Active {
-		return m.state, ErrNotActive
+		return m.state, m.clearSleepLocked(ctx)
 	}
 	err := m.endLocked(ctx, EndStopped)
 	return m.state, err
@@ -212,7 +213,7 @@ func (m *Manager) Extend(d, limit time.Duration) (State, error) {
 	next := m.state
 	next.Deadline = next.Deadline.Add(d)
 	if next.Deadline.Sub(m.now()) > limit {
-		return m.state, fmt.Errorf("new deadline would be more than %s from now", limit)
+		return m.state, fmt.Errorf("new deadline would be more than %gh from now", limit.Hours())
 	}
 	if err := m.saveLocked(next); err != nil {
 		return m.state, err
