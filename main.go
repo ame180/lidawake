@@ -29,10 +29,12 @@ var version = "dev"
 const usage = `lidawake - stay awake with lid closed, until lid reopens
 
 Usage:
-  lidawake start [-max 12h] [-min-battery 20] [-ignore-lid]
+  lidawake                        start with defaults, or show status if active
+  lidawake start [-min-battery 20] [-ignore-lid] [duration]
                                   disable sleep until lid closes and reopens
-                                  (or max elapses, or battery drops below min;
-                                  -ignore-lid: only max, battery, or stop)
+                                  (or duration elapses, default 12h, or battery
+                                  drops below min; -ignore-lid: only duration,
+                                  battery, or stop end it)
   lidawake extend <duration>      push the deadline out, keeping other settings
   lidawake stop                   end session now, re-enable sleep
   lidawake status [-json]         show session and pmset state
@@ -41,15 +43,23 @@ Usage:
   lidawake version
 `
 
+// Session defaults shared by start and bare lidawake.
+const (
+	defaultMax        = 12 * time.Hour
+	defaultMinBattery = 20
+)
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+	var cmd string
+	var args []string
+	if len(os.Args) > 1 {
+		cmd, args = os.Args[1], os.Args[2:]
 	}
-	cmd, args := os.Args[1], os.Args[2:]
 
 	var err error
 	switch cmd {
+	case "":
+		err = runDefault()
 	case "start":
 		err = runStart(args)
 	case "extend":
@@ -64,7 +74,7 @@ func main() {
 		err = runUninstall(args)
 	case "daemon":
 		err = runDaemon(args)
-	case "version":
+	case "version", "-v", "--version":
 		err = runVersion(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
@@ -78,23 +88,62 @@ func main() {
 	}
 }
 
-func runStart(args []string) error {
-	fs := newFlagSet("start [-max 12h] [-min-battery 20] [-ignore-lid]")
-	maxDuration := fs.Duration("max", 12*time.Hour, "safety deadline; sleep re-enabled after this even if lid never reopens")
-	minBattery := fs.Int("min-battery", 20, "end session when on battery below this percent; 0 disables")
-	ignoreLid := fs.Bool("ignore-lid", false, "keep running when the lid reopens; only max, battery, or stop end the session")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds()), MinBattery: *minBattery, IgnoreLid: *ignoreLid})
+// runDefault starts a session with default settings, or shows status if one
+// is already running, so bare lidawake never replaces a session.
+func runDefault() error {
+	s, err := call(rpc.Request{Cmd: rpc.CmdStatus})
 	if err != nil {
 		return err
 	}
-	if !resp.OK {
-		return errors.New(resp.Error)
+	if s.Active {
+		fmt.Println("Already active.")
+		printStatus(s)
+		return nil
 	}
-	printSessionSummary("Sleep disabled.", "Close the lid; reopening it re-enables sleep.", resp.Status, maxDuration.String())
+	return startSession(defaultMax, defaultMinBattery, false, false)
+}
+
+func runStart(args []string) error {
+	fs := newFlagSet("start [-min-battery 20] [-ignore-lid] [duration]")
+	maxDuration := fs.Duration("max", defaultMax, "safety deadline, same as the duration argument; sleep re-enabled after this even if lid never reopens")
+	minBattery := fs.Int("min-battery", defaultMinBattery, "end session when on battery below this percent; 0 disables")
+	ignoreLid := fs.Bool("ignore-lid", false, "keep running when the lid reopens; only the deadline, battery, or stop end the session")
+	_ = fs.Parse(args)
+	if fs.NArg() > 1 {
+		if strings.HasPrefix(fs.Arg(1), "-") {
+			return fmt.Errorf("start: flags go before the duration, got %q after it", fs.Arg(1))
+		}
+		return fmt.Errorf("start: unexpected argument %q", fs.Arg(1))
+	}
+	if fs.NArg() == 1 {
+		if flagGiven(fs, "max") {
+			return errors.New("start: give the duration once, as -max or as an argument")
+		}
+		d, err := time.ParseDuration(fs.Arg(0))
+		if err != nil {
+			return fmt.Errorf("start: %w", err)
+		}
+		*maxDuration = d
+	}
+
+	before, err := call(rpc.Request{Cmd: rpc.CmdStatus})
+	if err != nil {
+		return err
+	}
+	return startSession(*maxDuration, *minBattery, *ignoreLid, before.Active)
+}
+
+// startSession asks the daemon for a new session and prints its summary.
+// replacing notes that it took over an active session.
+func startSession(maxDuration time.Duration, minBattery int, ignoreLid, replacing bool) error {
+	s, err := call(rpc.Request{Cmd: rpc.CmdStart, MaxSeconds: int64(maxDuration.Seconds()), MinBattery: minBattery, IgnoreLid: ignoreLid})
+	if err != nil {
+		return err
+	}
+	if replacing {
+		fmt.Println("Replaced the active session.")
+	}
+	printSessionSummary("Sleep disabled.", "Close the lid; reopening it re-enables sleep.", s, formatDuration(maxDuration))
 	return nil
 }
 
@@ -111,15 +160,12 @@ func runExtend(args []string) error {
 	}
 
 	secs := int64(by.Seconds())
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: secs})
+	s, err := call(rpc.Request{Cmd: rpc.CmdExtend, MaxSeconds: secs})
 	if err != nil {
 		return err
 	}
-	if !resp.OK {
-		return errors.New(resp.Error)
-	}
-	printSessionSummary("Extended by "+(time.Duration(secs)*time.Second).String()+".", "Reopening the lid re-enables sleep.", resp.Status,
-		"in "+time.Until(resp.Status.Deadline).Round(time.Minute).String())
+	printSessionSummary("Extended by "+formatDuration(time.Duration(secs)*time.Second)+".", "Reopening the lid re-enables sleep.", s,
+		"in "+formatDuration(time.Until(s.Deadline).Round(time.Minute)))
 	return nil
 }
 
@@ -139,14 +185,21 @@ func runStop(args []string) error {
 	if err := parseFlags(newFlagSet("stop"), args); err != nil {
 		return err
 	}
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStop})
+	before, err := call(rpc.Request{Cmd: rpc.CmdStatus})
 	if err != nil {
 		return err
 	}
-	if !resp.OK {
-		return errors.New(resp.Error)
+	if _, err := call(rpc.Request{Cmd: rpc.CmdStop}); err != nil {
+		return err
 	}
-	fmt.Println("Session stopped. Sleep re-enabled.")
+	switch {
+	case before.Active:
+		fmt.Println("Session stopped. Sleep re-enabled.")
+	case before.SleepDisabled:
+		fmt.Println("No active session. Sleep was disabled outside lidawake; re-enabled.")
+	default:
+		fmt.Println("No active session. Sleep already enabled.")
+	}
 	return nil
 }
 
@@ -157,20 +210,29 @@ func runStatus(args []string) error {
 		return err
 	}
 
-	resp, err := rpc.Call(context.Background(), install.SocketPath, rpc.Request{Cmd: rpc.CmdStatus})
+	s, err := call(rpc.Request{Cmd: rpc.CmdStatus})
 	if err != nil {
 		return err
-	}
-	if !resp.OK {
-		return errors.New(resp.Error)
 	}
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(resp.Status)
+		return enc.Encode(s)
 	}
-	printStatus(resp.Status)
+	printStatus(s)
 	return nil
+}
+
+// call sends one request to the daemon; a refused request becomes an error.
+func call(req rpc.Request) (rpc.Status, error) {
+	resp, err := rpc.Call(context.Background(), install.SocketPath, req)
+	if err != nil {
+		return rpc.Status{}, err
+	}
+	if !resp.OK {
+		return resp.Status, errors.New(resp.Error)
+	}
+	return resp.Status, nil
 }
 
 func printStatus(s rpc.Status) {
@@ -185,18 +247,44 @@ func printStatus(s rpc.Status) {
 		fmt.Printf("Session:   active (%s)\n", phase)
 		fmt.Printf("Started:   %s\n", s.StartedAt.Local().Format("Mon 15:04"))
 		fmt.Printf("Deadline:  %s (in %s)\n", s.Deadline.Local().Format("Mon 15:04"),
-			time.Until(s.Deadline).Round(time.Minute))
-		fmt.Printf("Battery:   cutoff %s\n", batteryCutoff(s.MinBattery))
+			formatDuration(time.Until(s.Deadline).Round(time.Minute)))
+		printBattery(s)
+		fmt.Printf("Cutoff:    %s\n", batteryCutoff(s.MinBattery))
 	} else {
 		fmt.Println("Session:   none")
 		if s.LastEndReason != "" {
 			fmt.Printf("Last end:  %s at %s\n", s.LastEndReason, s.LastEndedAt.Local().Format("Mon 15:04"))
 		}
+		printBattery(s)
 	}
 	fmt.Printf("pmset:     SleepDisabled=%d\n", boolInt(s.SleepDisabled))
 	if !s.Active && s.SleepDisabled {
-		fmt.Println("WARNING: sleep disabled outside a session. Fix: sudo pmset -a disablesleep 0")
+		fmt.Println("WARNING: sleep disabled outside a session. Fix: lidawake stop")
 	}
+}
+
+// formatDuration prints d without trailing zero units: 12h, 1h30m, 45s.
+func formatDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
+
+// printBattery prints the charge and power source, if a battery was read.
+func printBattery(s rpc.Status) {
+	if s.BatteryPercent <= 0 {
+		return
+	}
+	source := "on AC power"
+	if s.OnBattery {
+		source = "on battery"
+	}
+	fmt.Printf("Battery:   %d%% (%s)\n", s.BatteryPercent, source)
 }
 
 func batteryCutoff(minBattery int) string {
@@ -291,6 +379,13 @@ func newFlagSet(synopsis string) *flag.FlagSet {
 		fs.PrintDefaults()
 	}
 	return fs
+}
+
+// flagGiven reports whether the named flag was set on the command line.
+func flagGiven(fs *flag.FlagSet, name string) bool {
+	given := false
+	fs.Visit(func(f *flag.Flag) { given = given || f.Name == name })
+	return given
 }
 
 // parseFlags parses args and rejects leftover positional arguments.
