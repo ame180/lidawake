@@ -11,7 +11,7 @@ Keep a MacBook awake with the lid closed — once. Reopening the lid re-enables 
 - `extend` adds time to the active session's deadline (still capped at 72h from now) and keeps every other setting; running `start` again would reset them to defaults.
 - Time-only mode (`-ignore-lid`) skips lid tracking: the session runs until the deadline, battery cutoff, or `stop`.
 - Battery cutoff (`-min-battery`, default 20, `0` disables) ends the session when running on battery below that percent. `start` refuses if already below it.
-- `stop` with no session still runs `disablesleep 0`, clearing a flag set outside lidawake.
+- `stop` with no session still runs `disablesleep 0`, clearing a stray flag (set by hand, or an earlier clear that failed).
 - State persisted to `/var/db/lidawake/state.json` on every transition.
 
 Crash / restart behaviour (daemon start):

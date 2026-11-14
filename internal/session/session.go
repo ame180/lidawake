@@ -187,7 +187,7 @@ func (m *Manager) Start(ctx context.Context, maxDuration time.Duration, minBatte
 }
 
 // Stop ends the active session. With no session it still re-enables sleep,
-// clearing a disablesleep flag set outside lidawake.
+// clearing a stray disablesleep flag (set by hand, or a clear still pending retry).
 func (m *Manager) Stop(ctx context.Context) (State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

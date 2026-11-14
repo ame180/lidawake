@@ -40,7 +40,7 @@ Usage:
   lidawake status [-json]         show session and pmset state
   sudo lidawake install [-uid N]  install binary + launchd daemon
   sudo lidawake uninstall         remove everything, re-enable sleep
-  lidawake version | -v
+  lidawake version                show version (also -v, --version)
 `
 
 // Session defaults shared by start and bare lidawake.
