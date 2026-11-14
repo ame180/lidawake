@@ -152,8 +152,13 @@ func TestDeadline(t *testing.T) {
 func TestStop(t *testing.T) {
 	ctx := t.Context()
 	h := newHarness(t, "boot-1")
-	if _, err := h.m.Stop(ctx); !errors.Is(err, ErrNotActive) {
-		t.Fatalf("stop without session: %v", err)
+	h.sleep.disabled = true
+	st, err := h.m.Stop(ctx)
+	if err != nil || h.sleep.disabled {
+		t.Fatalf("stop without session should clear stray disablesleep: err = %v, disabled = %v", err, h.sleep.disabled)
+	}
+	if st.LastEndReason != "" {
+		t.Fatalf("stop without session must not record an end: %+v", st)
 	}
 	h.start(t, time.Hour)
 	if _, err := h.m.Stop(ctx); err != nil {
